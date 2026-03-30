@@ -1,0 +1,92 @@
+:root {
+  /* Brand Colors (Figma Indigo) */
+  --primary: #4F46E5;
+  --primary-hover: #4338CA;
+  --primary-low-opaque: rgba(79, 70, 229, 0.05); /* Figma Active State */
+  
+  /* Backgrounds (Figma Light Mode) */
+  --bg-app: #E2E8F0; /* Workspace background */
+  --bg-sidebar: #FFFFFF;
+  --bg-header: #FFFFFF;
+  --bg-canvas: #F8FAFC; /* Chat area canvas */
+  --bg-input: #F1F5F9; /* Search bar & input backgrounds */
+  --bg-hover: #F1F5F9;
+  --bg-active: var(--primary-low-opaque);
+  
+  /* Typography Tokens */
+  --text-main: #1B1B1B;
+  --text-secondary: #5C697A;
+  --text-muted: #94A3B8;
+  --text-white: #FFFFFF;
+  
+  /* Status Colors */
+  --status-online: #10B981;
+  --status-away: #F59E0B;
+  --status-dnd: #EF4444;
+  
+  /* Message Bubbles */
+  --bg-msg-sent-gradient: linear-gradient(135deg, #4F46E5 0%, #3B82F6 100%);
+  --bg-msg-received: #FFFFFF;
+  
+  /* Layout & Spacing (Figma Accurate) */
+  --sidebar-width: 476px;
+  --header-height: 80px;
+  --border-radius-sm: 8px;
+  --border-radius-md: 12px; /* Search bar radius */
+  --border-radius-lg: 16px; /* Message bubble radius */
+  --border-radius-pill: 24px; /* Input pill radius */
+  
+  /* Borders */
+  --border-color: #E2E8F0;
+  --border-subtle: 1px solid #E2E8F0;
+  
+  /* Shadow */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background-color: var(--bg-surface);
+  color: var(--text-primary);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  font-family: inherit;
+}
+
+input:focus {
+  outline: none;
+}
+
+a {
+  text-decoration: none;
+  color: inherit;
+}
+
+.app-container {
+  height: 100vh;
+  display: flex;
+  overflow: hidden;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.fade-in {
+  animation: fadeIn 0.3s ease forwards;
+}
