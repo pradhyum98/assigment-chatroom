@@ -38,6 +38,11 @@ const ChatRoom: React.FC = () => {
     if (currentRoom) {
       socketService.joinRoom(currentRoom.roomId);
     }
+    return () => {
+      if (currentRoom) {
+        socketService.leaveRoom(currentRoom.roomId);
+      }
+    };
   }, [currentRoom]);
 
   useEffect(() => {

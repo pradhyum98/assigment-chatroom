@@ -30,7 +30,10 @@ const chatSlice = createSlice({
       state.messages = action.payload;
     },
     addMessage: (state, action: PayloadAction<Message>) => {
-      state.messages.push(action.payload);
+      const exists = state.messages.some(m => m.messageId === action.payload.messageId);
+      if (!exists) {
+        state.messages.push(action.payload);
+      }
     },
     setLoading: (state, action: PayloadAction<boolean>) => {
       state.loading = action.payload;

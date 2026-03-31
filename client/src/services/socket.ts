@@ -10,6 +10,10 @@ class SocketService {
   }
 
   connect() {
+    if (this.socket?.connected) {
+      return this.socket;
+    }
+    
     this.socket = io(SOCKET_URL);
     return this.socket;
   }

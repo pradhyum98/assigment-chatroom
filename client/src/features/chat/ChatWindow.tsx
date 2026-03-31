@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
-import { setMessages, addMessage } from './chatSlice';
+import { setMessages } from './chatSlice';
 import api from '../../services/api';
 import { socketService } from '../../services/socket';
 import { Send, Mic, Plus, CheckCheck, Loader2 } from 'lucide-react';
@@ -36,28 +36,6 @@ const ChatWindow: React.FC = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
   }, [messages]);
 
-  // Handle real-time messages
-  useEffect(() => {
-    if (!currentRoom) return;
-
-    // Join the room on the socket server
-    socketService.connect();
-    socketService.joinRoom(currentRoom.roomId);
-
-    const handleMessage = (message: any) => {
-      // Only add if it belongs to the current room
-      if (message.roomId === currentRoom.roomId) {
-        dispatch(addMessage(message));
-      }
-    };
-
-    socketService.onMessageReceived(handleMessage);
-
-    return () => {
-      socketService.offMessageReceived(handleMessage);
-      socketService.leaveRoom(currentRoom.roomId);
-    };
-  }, [currentRoom, dispatch]);
 
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
