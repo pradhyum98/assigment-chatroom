@@ -49,9 +49,9 @@ export const errorHandler = (
     logger.debug(`Client error (${statusCode}): ${message}`);
   }
 
+  // Never send stack traces to clients — log them server-side only
   res.status(statusCode).json({
     success: false,
     message,
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
   });
 };

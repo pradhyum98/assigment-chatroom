@@ -1,19 +1,124 @@
-import { Request, Response, NextFunction } from 'express';
+import { Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
+import mongoose from 'mongoose';
 import { ChatRoom } from '../models/ChatRoom';
+import { User } from '../models/User';
 import { AppError } from '../middleware/errorHandler';
-import { logger } from '../middleware/logger';
+import {  } from '../middleware/logger';
 import { AuthRequest } from '../types';
+import { auditLog } from '../utils/auditLogger';
 
 const createRoomSchema = z.object({
   roomName: z
     .string()
     .min(2, 'Provide a room name (at least 2 characters)')
-    .max(100, 'Room name is too long')
+    .max(50, 'Room name is too long (max 50 characters)')
     .trim(),
+  participants: z.array(z.string()).optional(), // Add participants for private groups
 });
 
+/**
+ * Get or create a direct message (DM) room with a friend
+ */
+export const createOrGetDM = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const user = req.user;
+    if (!user) throw new AppError('Unauthorized', 401);
+
+    const { friendId } = req.params;
+
+    if (!friendId || !mongoose.Types.ObjectId.isValid(friendId)) {
+      throw new AppError('A valid friend ID is required.', 400);
+    }
+
+    // Security check: Verify that they are friends
+    const currentUser = await User.findById(user._id);
+    if (!currentUser) throw new AppError('User not found.', 404);
+
+    const isFriend = currentUser.friends.some(
+      (fId) => fId.toString() === friendId.toString()
+    );
+
+    if (!isFriend) {
+      throw new AppError('You can only start a direct message with your friends.', 403);
+    }
+
+    // Normalize participant ordering to avoid duplicate DM rooms
+    const participantIds = [user._id.toString(), friendId.toString()].sort();
+
+    // Query for an existing DM room with these exact two participants
+    let room = await ChatRoom.findOne({
+      isDM: true,
+      participants: { $all: participantIds, $size: 2 },
+    });
+
+    if (room) {
+      const populated = await room.populate('participants', 'firstName lastName email');
+      res.status(200).json({
+        success: true,
+        message: 'DM room retrieved.',
+        data: { room: populated },
+      });
+      return;
+    }
+
+    // Generate random avatar color
+    const COLORS = ['#6366f1', '#ec4899', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
+    const getRandomColor = () => COLORS[Math.floor(Math.random() * COLORS.length)];
+
+    try {
+      // Create a new DM room
+      room = await ChatRoom.create({
+        roomId: uuidv4(),
+        isDM: true,
+        isPrivate: true,
+        avatarColor: getRandomColor(),
+        previewText: 'Click to start chatting',
+        createdBy: user._id,
+        participants: participantIds,
+      });
+
+      auditLog.dmRoomCreated(room.roomId, user.email, participantIds);
+    } catch (err: any) {
+      // Catch concurrent creation index collision
+      if (err.code === 11000) {
+        room = await ChatRoom.findOne({
+          isDM: true,
+          participants: { $all: participantIds, $size: 2 },
+        });
+        if (room) {
+          const populated = await room.populate('participants', 'firstName lastName email');
+          res.status(200).json({
+            success: true,
+            message: 'DM room retrieved.',
+            data: { room: populated },
+          });
+          return;
+        }
+      }
+      throw err;
+    }
+
+    const populated = await room.populate('participants', 'firstName lastName email');
+
+    res.status(201).json({
+      success: true,
+      message: 'DM room created successfully.',
+      data: { room: populated },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Create a new private group room
+ */
 export const createRoom = async (
   req: AuthRequest,
   res: Response,
@@ -31,7 +136,22 @@ export const createRoom = async (
       throw new AppError(error.errors[0].message, 400);
     }
 
-    const { roomName } = data;
+    const { roomName, participants = [] } = data;
+
+    // Validate all group participants are friends
+    const currentUser = await User.findById(user._id);
+    if (!currentUser) throw new AppError('User not found.', 404);
+
+    const validParticipants = [user._id.toString()];
+
+    for (const pId of participants) {
+      if (mongoose.Types.ObjectId.isValid(pId)) {
+        const isFriend = currentUser.friends.some((fId) => fId.toString() === pId);
+        if (isFriend) {
+          validParticipants.push(pId);
+        }
+      }
+    }
 
     const room = await ChatRoom.create({
       roomId: uuidv4(),
@@ -39,16 +159,18 @@ export const createRoom = async (
       avatarColor: getRandomColor(),
       previewText: 'Click to start chatting',
       createdBy: user._id,
-      participants: [user._id],
+      participants: validParticipants,
+      isDM: false,
+      isPrivate: true, // Private-by-default for security
     });
 
     const populated = await room.populate('createdBy', 'firstName lastName email');
 
-    logger.info(`New chatroom developed: "${roomName}" by ${user.email}`);
+    auditLog.dmRoomCreated(room.roomId, user.email, validParticipants);
 
     res.status(201).json({
       success: true,
-      message: 'Room created successfully.',
+      message: 'Group room created successfully.',
       data: { room: populated },
     });
   } catch (error) {
@@ -56,15 +178,24 @@ export const createRoom = async (
   }
 };
 
+/**
+ * Get all rooms where the current user is a participant
+ */
 export const getRooms = async (
-  _req: Request,
+  req: AuthRequest,
   res: Response,
   next: NextFunction
 ): Promise<void> => {
   try {
-    const rooms = await ChatRoom.find()
+    const user = req.user;
+    if (!user) throw new AppError('Unauthorized', 401);
+
+    const rooms = await ChatRoom.find({
+      participants: user._id,
+    })
       .populate('createdBy', 'firstName lastName email')
-      .sort({ createdAt: -1 })
+      .populate('participants', 'firstName lastName email')
+      .sort({ updatedAt: -1 })
       .lean();
 
     res.status(200).set('Cache-Control', 'no-store, max-age=0').json({
@@ -77,6 +208,9 @@ export const getRooms = async (
   }
 };
 
+/**
+ * Join a room (restricted for security)
+ */
 export const joinRoom = async (
   req: AuthRequest,
   res: Response,
@@ -91,21 +225,25 @@ export const joinRoom = async (
 
     if (!room) throw new AppError('This room no longer exists.', 404);
 
-    const alreadyJoined = room.participants.some(
-      (p) => p.toString() === user._id
+    // If it's a DM, you cannot join it by guessing the ID
+    if (room.isDM) {
+      throw new AppError('You are not authorized to join this room.', 403);
+    }
+
+    // For private group rooms, you must already be an invited participant
+    const isParticipant = room.participants.some(
+      (p) => p.toString() === user._id.toString()
     );
 
-    if (!alreadyJoined) {
-      room.participants.push(user._id as any);
-      await room.save();
-      logger.info(`User ${user.email} entered room: ${roomId}`);
+    if (!isParticipant) {
+      throw new AppError('You must be invited to join this private room.', 403);
     }
 
     const populated = await room.populate('createdBy', 'firstName lastName email');
 
     res.status(200).json({
       success: true,
-      message: alreadyJoined ? 'Rejoined room.' : 'Joined successfully.',
+      message: 'Rejoined room.',
       data: { room: populated },
     });
   } catch (error) {
@@ -113,18 +251,34 @@ export const joinRoom = async (
   }
 };
 
+/**
+ * Get details for a specific room (restricted to participants)
+ */
 export const getRoomById = async (
-  req: Request,
+  req: AuthRequest,
   res: Response,
   next: NextFunction
 ): Promise<void> => {
   try {
+    const user = req.user;
+    if (!user) throw new AppError('Unauthorized', 401);
+
     const { roomId } = req.params;
     const room = await ChatRoom.findOne({ roomId })
       .populate('createdBy', 'firstName lastName email')
+      .populate('participants', 'firstName lastName email')
       .lean();
 
     if (!room) throw new AppError('Room not found.', 404);
+
+    // Security check: Must be a participant of the room
+    const isParticipant = room.participants.some(
+      (p: any) => p._id.toString() === user._id.toString()
+    );
+
+    if (!isParticipant) {
+      throw new AppError('You are not authorized to access this room.', 403);
+    }
 
     res.status(200).json({
       success: true,

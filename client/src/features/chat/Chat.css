@@ -336,3 +336,108 @@
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* Phase 1 Messaging Improvements */
+
+.message-bubble.deleted .message-content {
+  color: var(--text-muted);
+}
+.message-bubble.sent.deleted .message-content {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.edited-tag {
+  font-size: 11px;
+  opacity: 0.7;
+  margin-left: 6px;
+  font-style: italic;
+}
+
+.message-actions-overlay {
+  position: absolute;
+  top: -12px;
+  right: 12px;
+  display: none;
+  background: white;
+  border-radius: 12px;
+  padding: 4px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  gap: 4px;
+  z-index: 10;
+}
+
+.message-bubble.received .message-actions-overlay {
+  right: auto;
+  left: 12px;
+}
+
+.message-bubble:hover .message-actions-overlay {
+  display: flex;
+}
+
+.message-actions-overlay button {
+  background: transparent;
+  border: none;
+  padding: 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+
+.message-actions-overlay button:hover {
+  background: #f1f5f9;
+}
+
+.reactions-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.reaction-badge {
+  background: rgba(0,0,0,0.05);
+  border-radius: 12px;
+  padding: 2px 6px;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.message-bubble.sent .reaction-badge {
+  background: rgba(255,255,255,0.2);
+}
+
+.typing-indicator {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-left: 16px;
+  font-style: italic;
+  padding: 4px 0;
+}
+
+.editing-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: #EEF2FF;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--primary);
+}
+
+.cancel-edit-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-weight: 500;
+  cursor: pointer;
+}
+.cancel-edit-btn:hover {
+  color: var(--text-main);
+}
