@@ -32,7 +32,8 @@ export interface MessageDoc extends Document {
 
   // Content
   type: MessageType;
-  content: string;
+  content?: string;
+  iv?: string; // AES-GCM Initialization Vector
   timestamp: Date;
 
   // Media (Phase 2 - fields present now for forward-compat)
@@ -41,6 +42,8 @@ export interface MessageDoc extends Document {
   mediaMimeType?: string;
   mediaSize?: number;
   thumbnailUrl?: string;
+  mediaKey?: string;
+  mediaIv?: string;
 
   // Threading
   replyTo?: mongoose.Types.ObjectId;
@@ -123,8 +126,12 @@ const MessageSchema = new Schema<MessageDoc>(
         'Message content is required for text/voice messages',
       ],
       trim: true,
-      maxlength: [2000, 'Message cannot exceed 2000 characters'],
+      maxlength: [10000, 'Message cannot exceed 10000 characters'],
       default: '',
+    },
+    iv: {
+      type: String,
+      default: undefined,
     },
     timestamp: {
       type: Date,
@@ -137,6 +144,8 @@ const MessageSchema = new Schema<MessageDoc>(
     mediaMimeType:  { type: String, maxlength: 100 },
     mediaSize:      { type: Number, min: 0 },
     thumbnailUrl:   { type: String },
+    mediaKey:       { type: String },
+    mediaIv:        { type: String },
 
     // ── Threading ─────────────────────────────────────────────────────────────
     replyTo: {

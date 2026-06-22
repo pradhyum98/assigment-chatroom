@@ -15,6 +15,7 @@ export interface RoomDoc extends Document {
   lastMessage?: mongoose.Types.ObjectId;
   pinnedMessages: mongoose.Types.ObjectId[];
   unreadCounts: Map<string, number>;
+  encryptedRoomKeys: Map<string, string>;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -97,6 +98,12 @@ const ChatRoomSchema = new Schema<RoomDoc>(
     unreadCounts: {
       type: Map,
       of: Number,
+      default: {},
+    },
+    // E2EE: participantId (string) -> encrypted base64 room key
+    encryptedRoomKeys: {
+      type: Map,
+      of: String,
       default: {},
     },
   },

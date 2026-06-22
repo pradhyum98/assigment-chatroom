@@ -8,6 +8,8 @@ import { User } from '../models/User';
 import { verifyToken } from '../utils/auth';
 import { logger } from '../middleware/logger';
 import { auditLog } from '../utils/auditLogger';
+import { CallLog } from '../models/CallLog';
+import { sendNotificationToUser } from '../routes/notifications';
 
 const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -17,7 +19,8 @@ const incomingMessageSchema = z.object({
   roomId:        z.string().regex(uuidRegex, 'Invalid Room ID UUID format'),
   senderId:      z.string().refine((id) => mongoose.Types.ObjectId.isValid(id), 'Invalid Sender ObjectId format'),
   senderName:    z.string().min(1).max(100),
-  content:       z.string().max(2000, 'Message is too long (max 2000 chars)').optional().default(''),
+  content:       z.string().max(10000, 'Message is too long (max 10000 chars)').optional().default(''),
+  iv:            z.string().optional(),
   replyTo:       z.string().optional(), // ObjectId of message being replied to
   clientMsgId:   z.string().optional(), // Client-side temporary ID for optimistic updates
   type:          z.enum(['text', 'image', 'video', 'audio', 'file', 'voice']).optional().default('text'),
@@ -26,6 +29,8 @@ const incomingMessageSchema = z.object({
   mediaMimeType: z.string().optional(),
   mediaSize:     z.number().optional(),
   thumbnailUrl:  z.string().optional(),
+  mediaKey:      z.string().optional(),
+  mediaIv:       z.string().optional(),
 }).refine((data) => {
   if (data.type === 'text' && (!data.content || data.content.trim().length === 0)) {
     return false;
@@ -59,12 +64,40 @@ const editMsgSchema = z.object({
   messageId: z.string().refine((id) => mongoose.Types.ObjectId.isValid(id), 'Invalid message ID'),
   roomId:    z.string().regex(uuidRegex, 'Invalid Room ID format'),
   content:   z.string().min(1).max(2000),
+  iv:        z.string().optional(),
 });
 
 const deleteMsgSchema = z.object({
   messageId:         z.string().refine((id) => mongoose.Types.ObjectId.isValid(id), 'Invalid message ID'),
   roomId:            z.string().regex(uuidRegex, 'Invalid Room ID format'),
   deleteForEveryone: z.boolean().optional().default(false),
+});
+
+// ─── WebRTC Signaling Schemas and State Maps ──────────────────────────────────
+const userSockets = new Map<string, Socket>();
+const activeCalls = new Map<string, { roomId: string; peerId: string; role: 'caller' | 'callee', callType: 'audio' | 'video', startedAt: Date, status: 'calling' | 'connected' }>();
+
+const callInitiateSchema = z.object({
+  roomId:   z.string().regex(uuidRegex, 'Invalid Room ID format'),
+  callType: z.enum(['audio', 'video']),
+});
+
+const callAcceptSchema = z.object({
+  roomId: z.string().regex(uuidRegex, 'Invalid Room ID format'),
+});
+
+const callRejectSchema = z.object({
+  roomId: z.string().regex(uuidRegex, 'Invalid Room ID format'),
+});
+
+const callSignalSchema = z.object({
+  roomId:       z.string().regex(uuidRegex, 'Invalid Room ID format'),
+  targetUserId: z.string().refine((id) => mongoose.Types.ObjectId.isValid(id), 'Invalid Target User ID'),
+  signal:       z.any(),
+});
+
+const callEndSchema = z.object({
+  roomId: z.string().regex(uuidRegex, 'Invalid Room ID format'),
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -121,6 +154,7 @@ export const setupSocketHandlers = (io: Server) => {
 
     const userId = user._id.toString();
     logger.debug(`Secure socket connected: ${socket.id} (${user.email})`);
+    userSockets.set(userId, socket);
 
     // Mark user online and broadcast presence to all their rooms
     await User.updateOne({ _id: user._id }, { isOnline: true, lastSeen: new Date() });
@@ -170,11 +204,14 @@ export const setupSocketHandlers = (io: Server) => {
           replyTo,
           clientMsgId,
           type,
+          iv,
           mediaUrl,
           mediaFilename,
           mediaMimeType,
           mediaSize,
           thumbnailUrl,
+          mediaKey,
+          mediaIv,
         } = data;
 
         const room = await getRoomAndVerifyMembership(roomId, userId);
@@ -211,6 +248,7 @@ export const setupSocketHandlers = (io: Server) => {
           roomId,
           type,
           content:     sanitizedContent,
+          iv,
           timestamp:   new Date(),
           replyTo:     replyToId,
           reactions:   [],
@@ -221,6 +259,8 @@ export const setupSocketHandlers = (io: Server) => {
           mediaMimeType,
           mediaSize,
           thumbnailUrl,
+          mediaKey,
+          mediaIv,
         });
 
         // Populate replyTo for broadcast
@@ -252,6 +292,14 @@ export const setupSocketHandlers = (io: Server) => {
         const unreadIncrements: Record<string, number> = {};
         otherParticipants.forEach((pid) => {
           unreadIncrements[`unreadCounts.${pid}`] = 1;
+
+          // Dispatch push notification if user is offline
+          if (!userSockets.has(pid)) {
+            sendNotificationToUser(pid, {
+              title: `New message from ${senderName}`,
+              body: type === 'text' ? sanitizedContent : `[${type} attachment]`,
+            });
+          }
         });
         if (Object.keys(unreadIncrements).length > 0) {
           ChatRoom.updateOne({ roomId }, { $inc: unreadIncrements })
@@ -408,7 +456,7 @@ export const setupSocketHandlers = (io: Server) => {
           return;
         }
 
-        const { messageId, roomId, content } = data;
+        const { messageId, roomId, content, iv } = data;
         const room = await getRoomAndVerifyMembership(roomId, userId);
         if (!room) {
           socket.emit('socket_error', { message: 'Room not found.' });
@@ -437,12 +485,16 @@ export const setupSocketHandlers = (io: Server) => {
         }
 
         msg.content  = sanitizeContent(content);
+        if (iv) {
+          msg.iv = iv;
+        }
         msg.editedAt = new Date();
         await msg.save();
 
         io.to(roomId).emit('message_edited', {
           messageId:   msg._id.toString(),
           content:     msg.content,
+          iv:          msg.iv,
           editedAt:    msg.editedAt,
           roomId,
         });
@@ -487,6 +539,34 @@ export const setupSocketHandlers = (io: Server) => {
           }
           msg.deletedForEveryone = true;
           msg.content            = '';
+          
+          // Clean up physical file if it exists and no other message is using it
+          if (msg.mediaUrl) {
+            try {
+              const fs = require('fs');
+              const path = require('path');
+              // Prevent IDOR by checking if any other message still references this media URL
+              const inUseCount = await Message.countDocuments({ mediaUrl: msg.mediaUrl });
+              if (inUseCount <= 1) {
+                // Safely extract just the filename to prevent directory traversal
+                const urlObj = new URL(msg.mediaUrl, 'http://localhost');
+                const filename = path.basename(decodeURIComponent(urlObj.pathname));
+                
+                if (filename && !filename.includes('..') && !filename.includes('/') && !filename.includes('\\')) {
+                  const filePath = path.resolve(__dirname, '../../uploads', filename);
+                  const uploadsDir = path.resolve(__dirname, '../../uploads');
+                  
+                  if (filePath.startsWith(uploadsDir) && filePath !== uploadsDir) {
+                    if (fs.existsSync(filePath)) {
+                      fs.unlinkSync(filePath);
+                    }
+                  }
+                }
+              }
+            } catch (err) {
+              logger.error('Failed to delete physical file during message deletion:', err);
+            }
+          }
         }
 
         msg.deletedAt = new Date();
@@ -503,6 +583,220 @@ export const setupSocketHandlers = (io: Server) => {
       }
     });
 
+    // ── WebRTC Signaling Listeners ───────────────────────────────────────────
+    socket.on('call:initiate', async (payload: any) => {
+      try {
+        const { success, data } = callInitiateSchema.safeParse(payload);
+        if (!success) {
+          socket.emit('socket_error', { message: 'Invalid call payload.' });
+          return;
+        }
+
+        const { roomId, callType } = data;
+        const room = await getRoomAndVerifyMembership(roomId, userId);
+        if (!room) {
+          socket.emit('socket_error', { message: 'Room not found.' });
+          return;
+        }
+
+        const peerId = room.participants
+          .map((p) => p.toString())
+          .find((pId) => pId !== userId);
+
+        if (!peerId) {
+          socket.emit('socket_error', { message: 'No calling peer found in this room.' });
+          return;
+        }
+
+        if (activeCalls.has(userId)) {
+          socket.emit('socket_error', { message: 'You are already in a call.' });
+          return;
+        }
+
+        if (activeCalls.has(peerId)) {
+          socket.emit('call:busy', { roomId });
+          return;
+        }
+
+        activeCalls.set(userId, { roomId, peerId, role: 'caller', callType, startedAt: new Date(), status: 'calling' });
+        activeCalls.set(peerId, { roomId, peerId: userId, role: 'callee', callType, startedAt: new Date(), status: 'calling' });
+
+        const peerSocket = userSockets.get(peerId);
+        if (peerSocket) {
+          peerSocket.emit('call:incoming', {
+            roomId,
+            callerId: userId,
+            callerName: `${user.firstName} ${user.lastName}`,
+            callType,
+          });
+        } else {
+          activeCalls.delete(userId);
+          activeCalls.delete(peerId);
+          socket.emit('call:offline', { roomId });
+          
+          sendNotificationToUser(peerId, {
+            title: `Missed ${callType} call from ${user.firstName} ${user.lastName}`,
+            body: 'You missed a call because you were offline.',
+          });
+        }
+      } catch (err) {
+        logger.error('Error in call:initiate:', err);
+      }
+    });
+
+    socket.on('call:accept', async (payload: any) => {
+      try {
+        const { success, data } = callAcceptSchema.safeParse(payload);
+        if (!success) return;
+
+        const { roomId } = data;
+        const call = activeCalls.get(userId);
+        if (!call || call.roomId !== roomId || call.role !== 'callee') {
+          return;
+        }
+
+        const peerSocket = userSockets.get(call.peerId);
+        if (peerSocket) {
+          peerSocket.emit('call:accepted', { roomId });
+        }
+        
+        call.status = 'connected';
+        call.startedAt = new Date();
+        const peerCall = activeCalls.get(call.peerId);
+        if (peerCall) {
+          peerCall.status = 'connected';
+          peerCall.startedAt = new Date();
+        }
+      } catch (err) {
+        logger.error('Error in call:accept:', err);
+      }
+    });
+
+    socket.on('call:reject', async (payload: any) => {
+      try {
+        const { success, data } = callRejectSchema.safeParse(payload);
+        if (!success) return;
+
+        const { roomId } = data;
+        const call = activeCalls.get(userId);
+        if (!call || call.roomId !== roomId) return;
+
+        const peerSocket = userSockets.get(call.peerId);
+        if (peerSocket) {
+          peerSocket.emit('call:rejected', { roomId });
+        }
+
+        const callerId = call.role === 'caller' ? userId : call.peerId;
+        const receiverId = call.role === 'caller' ? call.peerId : userId;
+
+        await CallLog.create({
+          roomId,
+          callerId,
+          receiverId,
+          callType: call.callType,
+          status: 'rejected',
+          startedAt: call.startedAt,
+          endedAt: new Date(),
+          duration: 0
+        });
+
+        const systemMsg = await Message.create({
+          messageId: uuidv4(),
+          senderId: userId, // use rejecting user as sender or caller
+          senderName: 'System',
+          roomId,
+          type: 'text',
+          content: `📞 Missed ${call.callType} call (Rejected)`,
+          timestamp: new Date()
+        });
+        io.to(roomId).emit('message_received', { ...systemMsg.toObject(), clientMsgId: uuidv4() });
+
+        activeCalls.delete(userId);
+        activeCalls.delete(call.peerId);
+      } catch (err) {
+        logger.error('Error in call:reject:', err);
+      }
+    });
+
+    socket.on('call:signal', async (payload: any) => {
+      try {
+        const { success, data } = callSignalSchema.safeParse(payload);
+        if (!success) return;
+
+        const { roomId, targetUserId, signal } = data;
+        const room = await getRoomAndVerifyMembership(roomId, userId);
+        if (!room) return;
+
+        const targetIsMember = room.participants.some((p) => p.toString() === targetUserId);
+        if (!targetIsMember) return;
+
+        const targetSocket = userSockets.get(targetUserId);
+        if (targetSocket) {
+          targetSocket.emit('call:signal', {
+            roomId,
+            senderId: userId,
+            signal,
+          });
+        }
+      } catch (err) {
+        logger.error('Error in call:signal:', err);
+      }
+    });
+
+    socket.on('call:end', async (payload: any) => {
+      try {
+        const { success, data } = callEndSchema.safeParse(payload);
+        if (!success) return;
+
+        const { roomId } = data;
+        const call = activeCalls.get(userId);
+        if (!call || call.roomId !== roomId) return;
+
+        const peerSocket = userSockets.get(call.peerId);
+        if (peerSocket) {
+          peerSocket.emit('call:ended', { roomId });
+        }
+
+        const now = new Date();
+        const duration = call.status === 'connected' ? Math.floor((now.getTime() - call.startedAt.getTime()) / 1000) : 0;
+        const finalStatus = call.status === 'connected' ? 'completed' : (call.role === 'caller' ? 'cancelled' : 'missed');
+
+        const callerId = call.role === 'caller' ? userId : call.peerId;
+        const receiverId = call.role === 'caller' ? call.peerId : userId;
+
+        await CallLog.create({
+          roomId,
+          callerId,
+          receiverId,
+          callType: call.callType,
+          status: finalStatus,
+          startedAt: call.startedAt,
+          endedAt: now,
+          duration
+        });
+
+        const msgContent = finalStatus === 'completed' 
+          ? `📞 ${call.callType === 'video' ? 'Video' : 'Audio'} call ended (${duration}s)`
+          : `📞 Missed ${call.callType} call`;
+
+        const systemMsg = await Message.create({
+          messageId: uuidv4(),
+          senderId: userId,
+          senderName: 'System',
+          roomId,
+          type: 'text',
+          content: msgContent,
+          timestamp: new Date()
+        });
+        io.to(roomId).emit('message_received', { ...systemMsg.toObject(), clientMsgId: uuidv4() });
+
+        activeCalls.delete(userId);
+        activeCalls.delete(call.peerId);
+      } catch (err) {
+        logger.error('Error in call:end:', err);
+      }
+    });
+
     // ── leave_room ────────────────────────────────────────────────────────────
     socket.on('leave_room', (roomId: string) => {
       if (!roomId || typeof roomId !== 'string' || !uuidRegex.test(roomId)) return;
@@ -513,6 +807,37 @@ export const setupSocketHandlers = (io: Server) => {
     // ── disconnect ────────────────────────────────────────────────────────────
     socket.on('disconnect', async () => {
       logger.debug(`Socket disconnected: ${socket.id} (${user.email})`);
+      userSockets.delete(userId);
+
+      const activeCall = activeCalls.get(userId);
+      if (activeCall) {
+        const peerSocket = userSockets.get(activeCall.peerId);
+        if (peerSocket) {
+          peerSocket.emit('call:ended', { roomId: activeCall.roomId });
+        }
+        
+        const now2 = new Date();
+        const duration = activeCall.status === 'connected' ? Math.floor((now2.getTime() - activeCall.startedAt.getTime()) / 1000) : 0;
+        const finalStatus = activeCall.status === 'connected' ? 'completed' : 'missed';
+        
+        const callerId = activeCall.role === 'caller' ? userId : activeCall.peerId;
+        const receiverId = activeCall.role === 'caller' ? activeCall.peerId : userId;
+
+        await CallLog.create({
+          roomId: activeCall.roomId,
+          callerId,
+          receiverId,
+          callType: activeCall.callType,
+          status: finalStatus,
+          startedAt: activeCall.startedAt,
+          endedAt: now2,
+          duration
+        }).catch(err => logger.error('Failed to log call on disconnect:', err));
+
+        activeCalls.delete(userId);
+        activeCalls.delete(activeCall.peerId);
+      }
+
       const now = new Date();
       await User.updateOne({ _id: user._id }, { isOnline: false, lastSeen: now });
 

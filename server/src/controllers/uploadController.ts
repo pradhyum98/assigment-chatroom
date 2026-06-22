@@ -27,6 +27,8 @@ const ALLOWED_MIME_TYPES = [
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'text/plain',
+  // E2EE encrypted blobs
+  'application/octet-stream'
 ];
 
 const storage = multer.diskStorage({

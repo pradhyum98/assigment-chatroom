@@ -13,11 +13,17 @@ const signupSchema = z.object({
   lastName: z.string().min(2, 'Last name is required (min 2 characters)').max(50),
   email: z.string().email('Please provide a valid email'),
   password: z.string().min(6, 'Password must be at least 6 letters long'),
+  publicKey: z.string().optional(),
+  encryptedPrivateKey: z.object({
+    ciphertext: z.string(),
+    iv: z.string(),
+  }).optional(),
 });
 
 const loginSchema = z.object({
   email: z.string().email('Please enter a valid email'),
   password: z.string().min(1, 'Password is required to continue'),
+  publicKey: z.string().optional(),
 });
 
 export const signup = async (
@@ -32,7 +38,7 @@ export const signup = async (
       throw new AppError(error.errors[0].message, 400);
     }
 
-    const { firstName, lastName, email, password } = data;
+    const { firstName, lastName, email, password, publicKey, encryptedPrivateKey } = data;
 
     const existingUser = await User.findOne({ email });
     if (existingUser) {
@@ -40,7 +46,7 @@ export const signup = async (
       throw new AppError('This email is already registered. Try logging in instead.', 409);
     }
 
-    const user = await User.create({ firstName, lastName, email, password });
+    const user = await User.create({ firstName, lastName, email, password, publicKey, encryptedPrivateKey });
     const token = signToken({ userId: user._id.toString(), email: user.email });
 
     auditLog.registrationSuccess(email, req.ip || '');
@@ -72,13 +78,19 @@ export const login = async (
       throw new AppError(error.errors[0].message, 400);
     }
 
-    const { email, password } = data;
+    const { email, password, publicKey } = data;
     attemptedEmail = email;
 
     const user = await User.findOne({ email }).select('+password');
     if (!user || !(await user.comparePassword(password))) {
       auditLog.loginFailed(attemptedEmail, ip, 'Invalid email or password');
       throw new AppError('Incorrect email or password combination.', 401);
+    }
+
+    // Update public key if provided (new device login)
+    if (publicKey && user.publicKey !== publicKey) {
+      user.publicKey = publicKey;
+      await user.save();
     }
 
     const token = signToken({ userId: user._id.toString(), email: user.email });

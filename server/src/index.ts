@@ -3,13 +3,19 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import helmet from 'helmet';
+import compression from 'compression';
 import dotenv from 'dotenv';
 import connectDB from './config/db';
 import authRoutes from './routes/auth';
 import roomRoutes from './routes/rooms';
+import groupRoutes from './routes/groups';
+import searchRoutes from './routes/search';
 import messageRoutes from './routes/messages';
 import friendsRoutes from './routes/friends';
 import uploadRoutes from './routes/upload';
+import callRoutes from './routes/calls';
+import webrtcRoutes from './routes/webrtc';
+import notificationsRoutes from './routes/notifications';
 import path from 'path';
 import { authenticate } from './middleware/auth';
 import { logger } from './middleware/logger';
@@ -44,8 +50,20 @@ const corsOptions = {
   credentials: true,
 };
 
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "blob:", "http:", "https:"],
+      mediaSrc: ["'self'", "blob:", "http:", "https:"],
+      connectSrc: ["'self'", "ws:", "wss:", "http:", "https:"],
+    },
+  },
+}));
 app.use(express.json({ limit: '10kb' })); // Restrict JSON payload sizes to prevent Denial of Service (DoS)
+app.use(compression()); // Compress responses
 app.use(cors(corsOptions));
 app.use(preventNoSqlInjection); // Global check to prevent NoSQL query operator injection
 app.use(requestLogger);
@@ -61,9 +79,14 @@ setupSocketHandlers(io);
 // Mount rate limiters securely to relevant endpoints
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/rooms', generalLimiter, roomRoutes);
+app.use('/api/groups', generalLimiter, groupRoutes);
+app.use('/api/search', generalLimiter, searchRoutes);
+app.use('/api/rooms', generalLimiter, callRoutes);
+app.use('/api/calls', generalLimiter, webrtcRoutes);
 app.use('/api/messages', generalLimiter, messageRoutes);
 app.use('/api/friends', generalLimiter, friendsRoutes);
 app.use('/api/upload', generalLimiter, uploadRoutes);
+app.use('/api/notifications', generalLimiter, notificationsRoutes);
 
 // Serve the uploads directory statically (gated by authenticate middleware)
 app.use('/uploads', authenticate, express.static(path.join(__dirname, '../uploads')));

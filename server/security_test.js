@@ -650,6 +650,42 @@ async function testSocketSecurity() {
     await new Promise((r) => setTimeout(r, 500));
     record(CAT, 'Unauthorized typing event silently rejected (no crash)', true, false, 'Silently dropped by server');
 
+    // Test Message Edit IV updating
+    if (dmRoomId) {
+      // 1. Send a message
+      const msgData = {
+        roomId: dmRoomId,
+        senderId: userAId,
+        senderName: 'TestUser A',
+        content: 'Original ciphertext',
+        iv: 'OriginalIV123',
+        clientMsgId: 'test-iv-1',
+        type: 'text'
+      };
+      
+      const newMsgResponse = await emitAndWait(socket, 'send_message', msgData, 'message_received', 2000);
+      if (newMsgResponse && newMsgResponse._id) {
+        // 2. Edit the message
+        const editData = {
+          messageId: newMsgResponse._id,
+          roomId: dmRoomId,
+          content: 'Edited ciphertext',
+          iv: 'NewIV456'
+        };
+        
+        const editResponse = await emitAndWait(socket, 'edit_message', editData, 'message_edited', 2000);
+        
+        // Verify IV was updated
+        const ivUpdated = editResponse && editResponse.iv === 'NewIV456';
+        record(CAT, 'Message edit securely updates IV (prevents AES-GCM nonce reuse)',
+          ivUpdated, !ivUpdated,
+          ivUpdated ? 'IV successfully updated' : 'IV NOT UPDATED! Cryptographic failure.');
+      } else {
+        record(CAT, 'Message edit securely updates IV (prevents AES-GCM nonce reuse)',
+          false, true, 'Failed to send initial message for edit test');
+      }
+    }
+
     socket.disconnect();
   }
 }
@@ -852,6 +888,11 @@ async function testFileUploadAndStorage() {
     record(CAT, 'Response payload contains correct URL and type',
       uploadedUrl && rValid.body.data.type === 'image', false);
   }
+
+  // 2.5 Uploading application/octet-stream (E2EE blobs) works
+  const mockEncrypted = Buffer.alloc(50, 0xAA);
+  const rEncrypted = await uploadFileBuffer(tokenA, 'encrypted.blob', 'application/octet-stream', mockEncrypted);
+  record(CAT, 'Encrypted blob (application/octet-stream) upload returns 200', rEncrypted.status === 200, false, `HTTP ${rEncrypted.status}`);
 
   // 3. Uploading invalid MIME type fails
   const mockHtml = Buffer.from('<html><body>Hello</body></html>');

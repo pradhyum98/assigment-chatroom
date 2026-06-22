@@ -16,6 +16,7 @@ const createRoomSchema = z.object({
     .max(50, 'Room name is too long (max 50 characters)')
     .trim(),
   participants: z.array(z.string()).optional(), // Add participants for private groups
+  encryptedRoomKeys: z.record(z.string()).optional(), // Record<userId, encryptedKey>
 });
 
 /**
@@ -81,6 +82,7 @@ export const createOrGetDM = async (
         previewText: 'Click to start chatting',
         createdBy: user._id,
         participants: participantIds,
+        encryptedRoomKeys: req.body.encryptedRoomKeys || {},
       });
 
       auditLog.dmRoomCreated(room.roomId, user.email, participantIds);
@@ -136,7 +138,7 @@ export const createRoom = async (
       throw new AppError(error.errors[0].message, 400);
     }
 
-    const { roomName, participants = [] } = data;
+    const { roomName, participants = [], encryptedRoomKeys = {} } = data;
 
     // Validate all group participants are friends
     const currentUser = await User.findById(user._id);
@@ -162,6 +164,8 @@ export const createRoom = async (
       participants: validParticipants,
       isDM: false,
       isPrivate: true, // Private-by-default for security
+      admins: [user._id],
+      encryptedRoomKeys,
     });
 
     const populated = await room.populate('createdBy', 'firstName lastName email');
@@ -283,6 +287,59 @@ export const getRoomById = async (
     res.status(200).json({
       success: true,
       message: 'Room details retrieved.',
+      data: { room },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Remove a member from a room and update encrypted keys for remaining members
+ */
+export const removeMember = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const user = req.user;
+    if (!user) throw new AppError('Unauthorized', 401);
+
+    const { roomId, memberId } = req.params;
+    const { encryptedRoomKeys } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(memberId)) {
+      throw new AppError('Invalid member ID.', 400);
+    }
+
+    const room = await ChatRoom.findOne({ roomId });
+    if (!room) throw new AppError('Room not found.', 404);
+
+    if (room.isDM) {
+      throw new AppError('Cannot remove members from a DM.', 400);
+    }
+
+    // Only admins or the member themselves can remove
+    const isAdmin = room.admins.some((adminId) => adminId.toString() === user._id.toString());
+    const isSelf = user._id.toString() === memberId;
+    if (!isAdmin && !isSelf) {
+      throw new AppError('Only admins can remove members.', 403);
+    }
+
+    room.participants = room.participants.filter((pId) => pId.toString() !== memberId);
+    room.admins = room.admins.filter((adminId) => adminId.toString() !== memberId);
+    
+    // Update the encrypted keys with the newly provided ones for the remaining members
+    if (encryptedRoomKeys) {
+      room.encryptedRoomKeys = encryptedRoomKeys;
+    }
+
+    await room.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Member removed and keys rotated.',
       data: { room },
     });
   } catch (error) {

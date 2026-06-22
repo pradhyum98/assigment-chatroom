@@ -8,6 +8,11 @@ export interface User {
   lastName: string;
   email: string;
   password?: string;
+  publicKey?: string;
+  encryptedPrivateKey?: {
+    ciphertext: string;
+    iv: string;
+  };
   createdAt: Date;
   updatedAt: Date;
 }
@@ -22,6 +27,13 @@ export interface UserPublic {
   // Presence
   lastSeen?: Date;
   isOnline?: boolean;
+
+  // Crypto (E2EE)
+  publicKey?: string;
+  encryptedPrivateKey?: {
+    ciphertext: string;
+    iv: string;
+  };
 
   // Profile
   avatar?: string;
@@ -90,6 +102,8 @@ export interface Message {
   mediaMimeType?: string;
   mediaSize?: number;
   thumbnailUrl?: string;
+  mediaKey?: string;
+  mediaIv?: string;
 
   // Threading
   replyTo?: string;

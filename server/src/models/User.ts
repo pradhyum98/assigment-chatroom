@@ -12,6 +12,13 @@ export interface UserDoc extends Document {
   lastSeen: Date;
   isOnline: boolean;
 
+  // Crypto (E2EE)
+  publicKey?: string;
+  encryptedPrivateKey?: {
+    ciphertext: string;
+    iv: string;
+  };
+
   // Profile (Phase 9)
   avatar?: string;
   bio?: string;
@@ -72,6 +79,19 @@ const UserSchema = new Schema<UserDoc>(
     isOnline: {
       type: Boolean,
       default: false,
+    },
+
+    // ── Crypto ─────────────────────────────────────────────────────────────────
+    publicKey: {
+      type: String,
+      default: undefined,
+    },
+    encryptedPrivateKey: {
+      type: {
+        ciphertext: String,
+        iv: String,
+      },
+      default: undefined,
     },
 
     // ── Profile ────────────────────────────────────────────────────────────────
