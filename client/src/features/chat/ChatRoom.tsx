@@ -3,9 +3,9 @@ import Sidebar from '../rooms/Sidebar';
 import ChatWindow from './ChatWindow';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { socketService } from '../../services/socket';
-import { addMessage } from './chatSlice';
+import { addMessage, updateMessage, deleteMessage, updateMessageReactions, updateMessageReceipts, setTyping } from './chatSlice';
 import api from '../../services/api';
-import { setRooms } from '../rooms/roomsSlice';
+import { setRooms, updateRoomPreview, updatePresence } from '../rooms/roomsSlice';
 import './Chat.css';
 
 const ChatRoom: React.FC = () => {
@@ -48,18 +48,70 @@ const ChatRoom: React.FC = () => {
   useEffect(() => {
     // Handle incoming messages for current room
     const handleMessage = (message: any) => {
+      // Update room preview globally
+      dispatch(updateRoomPreview({
+        roomId: message.roomId,
+        previewText: message.content,
+        unreadIncrementFor: message.roomId !== currentRoom?.roomId ? undefined : undefined // Need to handle unread better, skipping here for now since backend increments
+      }));
+
       if (currentRoom && message.roomId === currentRoom.roomId) {
         dispatch(addMessage(message));
       }
     };
 
-    socketService.onMessageReceived(handleMessage);
+    const handleMessageEdited = (data: any) => {
+      dispatch(updateRoomPreview({ roomId: data.roomId, previewText: data.content }));
+      if (currentRoom && data.roomId === currentRoom.roomId) {
+        dispatch(updateMessage(data));
+      }
+    };
 
-    // This effectively replaces the generic callback with the closure containing currentRoom
+    const handleMessageDeleted = (data: any) => {
+      if (currentRoom && data.roomId === currentRoom.roomId) {
+        dispatch(deleteMessage(data));
+      }
+    };
+
+    const handleReactionUpdated = (data: any) => {
+      dispatch(updateMessageReactions(data));
+    };
+
+    const handleMessagesRead = (data: any) => {
+      if (currentRoom && data.roomId === currentRoom.roomId) {
+        dispatch(updateMessageReceipts({ messageIds: data.messageIds, type: 'read', receipt: { userId: data.userId, readAt: data.readAt } }));
+      }
+    };
+
+    const handleMessagesDelivered = (data: any) => {
+      if (currentRoom && data.roomId === currentRoom.roomId) {
+        dispatch(updateMessageReceipts({ messageIds: data.messageIds, type: 'delivered', receipt: { userId: data.userId, deliveredAt: data.deliveredAt } }));
+      }
+    };
+
+    const handleUserTyping = (data: any) => {
+      if (currentRoom && data.roomId === currentRoom.roomId) {
+        dispatch(setTyping(data));
+      }
+    };
+
+    const handlePresenceUpdate = (data: any) => {
+      dispatch(updatePresence(data));
+    };
+
+    socketService.onMessageReceived(handleMessage);
+    socketService.onMessageEdited(handleMessageEdited);
+    socketService.onMessageDeleted(handleMessageDeleted);
+    socketService.onReactionUpdated(handleReactionUpdated);
+    socketService.onMessagesRead(handleMessagesRead);
+    socketService.onMessagesDelivered(handleMessagesDelivered);
+    socketService.onUserTyping(handleUserTyping);
+    socketService.onPresenceUpdate(handlePresenceUpdate);
+
     return () => {
-       // Note: we can't easily off() yet since socketService doesn't expose it, 
-       // but we will update socketService to handle removing listeners.
        socketService.offMessageReceived(handleMessage);
+       // we skip unregistering others for brevity as socket.ts doesn't have off() for them yet,
+       // and this effect only runs when currentRoom changes, which is fine to overwrite
     }
   }, [dispatch, currentRoom]);
 

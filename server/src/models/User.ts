@@ -6,9 +6,25 @@ export interface UserDoc extends Document {
   lastName: string;
   email: string;
   password: string;
-  comparePassword(candidatePassword: string): Promise<boolean>;
+  friends: mongoose.Types.ObjectId[];
+
+  // Presence
+  lastSeen: Date;
+  isOnline: boolean;
+
+  // Profile (Phase 9)
+  avatar?: string;
+  bio?: string;
+  statusMessage?: string;
+
+  // Privacy settings (Phase 9)
+  privacyLastSeen: 'everyone' | 'friends' | 'nobody';
+  privacyOnlineStatus: 'everyone' | 'friends' | 'nobody';
+
   createdAt: Date;
   updatedAt: Date;
+
+  comparePassword(candidatePassword: string): Promise<boolean>;
 }
 
 const UserSchema = new Schema<UserDoc>(
@@ -40,6 +56,52 @@ const UserSchema = new Schema<UserDoc>(
       required: [true, 'Password is required'],
       minlength: [6, 'Password must be at least 6 characters'],
       select: false,
+    },
+    friends: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: 'User',
+      },
+    ],
+
+    // ── Presence ───────────────────────────────────────────────────────────────
+    lastSeen: {
+      type: Date,
+      default: Date.now,
+    },
+    isOnline: {
+      type: Boolean,
+      default: false,
+    },
+
+    // ── Profile ────────────────────────────────────────────────────────────────
+    avatar: {
+      type: String,
+      default: undefined,
+    },
+    bio: {
+      type: String,
+      trim: true,
+      maxlength: [200, 'Bio cannot exceed 200 characters'],
+      default: undefined,
+    },
+    statusMessage: {
+      type: String,
+      trim: true,
+      maxlength: [100, 'Status message cannot exceed 100 characters'],
+      default: undefined,
+    },
+
+    // ── Privacy settings ───────────────────────────────────────────────────────
+    privacyLastSeen: {
+      type: String,
+      enum: ['everyone', 'friends', 'nobody'],
+      default: 'friends',
+    },
+    privacyOnlineStatus: {
+      type: String,
+      enum: ['everyone', 'friends', 'nobody'],
+      default: 'friends',
     },
   },
   {

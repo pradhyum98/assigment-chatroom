@@ -2,10 +2,11 @@ import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { User } from '../models/User';
 import { AppError } from '../middleware/errorHandler';
-import { logger } from '../middleware/logger';
+import {  } from '../middleware/logger';
 import { signToken } from '../utils/auth';
 import { mapUserResponse } from '../utils/user';
 import { AuthRequest } from '../types';
+import { auditLog } from '../utils/auditLogger';
 
 const signupSchema = z.object({
   firstName: z.string().min(2, 'First name is required (min 2 characters)').max(50),
@@ -35,13 +36,14 @@ export const signup = async (
 
     const existingUser = await User.findOne({ email });
     if (existingUser) {
+      auditLog.loginFailed(email, req.ip || '', 'Duplicate registration attempt');
       throw new AppError('This email is already registered. Try logging in instead.', 409);
     }
 
     const user = await User.create({ firstName, lastName, email, password });
     const token = signToken({ userId: user._id.toString(), email: user.email });
 
-    logger.info(`User registration successful for: ${email}`);
+    auditLog.registrationSuccess(email, req.ip || '');
 
     res.status(201).json({
       success: true,
@@ -61,6 +63,8 @@ export const login = async (
   res: Response,
   next: NextFunction
 ): Promise<void> => {
+  const ip = req.ip || '';
+  let attemptedEmail = '';
   try {
     const { success, data, error } = loginSchema.safeParse(req.body);
 
@@ -69,15 +73,17 @@ export const login = async (
     }
 
     const { email, password } = data;
+    attemptedEmail = email;
 
     const user = await User.findOne({ email }).select('+password');
     if (!user || !(await user.comparePassword(password))) {
+      auditLog.loginFailed(attemptedEmail, ip, 'Invalid email or password');
       throw new AppError('Incorrect email or password combination.', 401);
     }
 
     const token = signToken({ userId: user._id.toString(), email: user.email });
 
-    logger.info(`Successful login: ${email}`);
+    auditLog.loginSuccess(email, ip);
 
     res.status(200).json({
       success: true,
@@ -88,6 +94,9 @@ export const login = async (
       },
     });
   } catch (error) {
+    if (attemptedEmail && !(error instanceof AppError)) {
+      auditLog.loginFailed(attemptedEmail, ip, 'Error during login process');
+    }
     next(error);
   }
 };
