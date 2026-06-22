@@ -784,6 +784,102 @@ async function testHealthEndpoint() {
   record(CAT, 'Health endpoint does not require auth', r.status !== 401, false, `HTTP ${r.status}`);
 }
 
+// ─── 16. File Upload & Storage Tests ───────────────────────────────────────────
+function uploadFileBuffer(token, filename, mimeType, buffer) {
+  return new Promise((resolve) => {
+    const boundary = '----WebKitFormBoundary' + Math.random().toString(36).substring(2);
+    
+    let header = `--${boundary}\r\n`;
+    header += `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n`;
+    header += `Content-Type: ${mimeType}\r\n\r\n`;
+    
+    const footer = `\r\n--${boundary}--\r\n`;
+    
+    const reqHeaders = {
+      'Content-Type': `multipart/form-data; boundary=${boundary}`,
+      'Authorization': `Bearer ${token}`,
+    };
+    
+    const url = new URL(`${API}/upload`);
+    
+    const options = {
+      hostname : url.hostname,
+      port     : url.port || 80,
+      path     : url.pathname,
+      method   : 'POST',
+      headers  : reqHeaders,
+    };
+    
+    const req = http.request(options, (res) => {
+      let raw = '';
+      res.on('data', (c) => { raw += c; });
+      res.on('end', () => {
+        let json = null;
+        try { json = JSON.parse(raw); } catch (_) {}
+        resolve({ status: res.statusCode, body: json });
+      });
+    });
+    
+    req.on('error', (err) => resolve({ status: 0, error: err.message, body: null }));
+    
+    req.write(Buffer.from(header, 'utf-8'));
+    req.write(buffer);
+    req.write(Buffer.from(footer, 'utf-8'));
+    req.end();
+  });
+}
+
+async function testFileUploadAndStorage() {
+  const CAT = 'File Upload & Storage';
+  initCategory(CAT);
+  console.log(`\n── ${CAT} ──`);
+
+  // 1. Unauthenticated upload fails
+  const boundary = '----WebKitFormBoundaryFake';
+  const rUnauth = await request('POST', '/upload', {
+    headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` }
+  });
+  record(CAT, 'Unauthenticated file upload returns 401', rUnauth.status === 401, false, `HTTP ${rUnauth.status}`);
+
+  // 2. Uploading valid file works
+  const mockJpg = Buffer.alloc(100, 0xFF);
+  const rValid = await uploadFileBuffer(tokenA, 'test_image.jpg', 'image/jpeg', mockJpg);
+  record(CAT, 'Valid JPEG image upload returns 200', rValid.status === 200, false, `HTTP ${rValid.status}`);
+
+  let uploadedUrl = null;
+  if (rValid.body && rValid.body.success) {
+    uploadedUrl = rValid.body.data.url;
+    record(CAT, 'Response payload contains correct URL and type',
+      uploadedUrl && rValid.body.data.type === 'image', false);
+  }
+
+  // 3. Uploading invalid MIME type fails
+  const mockHtml = Buffer.from('<html><body>Hello</body></html>');
+  const rInvalidMime = await uploadFileBuffer(tokenA, 'index.html', 'text/html', mockHtml);
+  record(CAT, 'HTML files (invalid MIME) are rejected', rInvalidMime.status === 400, false, `HTTP ${rInvalidMime.status}`);
+
+  // 4. Accessing uploaded file statically (query token auth)
+  if (uploadedUrl) {
+    // With valid token
+    const fileUrlWithToken = `${uploadedUrl}?token=${tokenA}`;
+    const rDownloadAuth = await request('GET', `${BASE_URL}${fileUrlWithToken}`);
+    record(CAT, 'Statically downloading file with token parameter returns 200', rDownloadAuth.status === 200, false, `HTTP ${rDownloadAuth.status}`);
+
+    // Without token
+    const rDownloadNoAuth = await request('GET', `${BASE_URL}${uploadedUrl}`);
+    record(CAT, 'Statically downloading file without token returns 401', rDownloadNoAuth.status === 401, false, `HTTP ${rDownloadNoAuth.status}`);
+
+    // Path traversal block test
+    const traversalUrl = `${BASE_URL}/uploads/../package.json?token=${tokenA}`;
+    const rTraversal = await request('GET', traversalUrl);
+    record(CAT, 'Directory traversal attempts are blocked', rTraversal.status === 404 || rTraversal.status === 403, false, `HTTP ${rTraversal.status}`);
+  } else {
+    record(CAT, 'Statically downloading file with token parameter returns 200 (skipped)', false, true);
+    record(CAT, 'Statically downloading file without token returns 401 (skipped)', false, true);
+    record(CAT, 'Directory traversal attempts are blocked (skipped)', false, true);
+  }
+}
+
 // ─── Final Report ─────────────────────────────────────────────────────────────
 function printReport() {
   console.log('\n');
@@ -802,6 +898,7 @@ function printReport() {
     'NoSQL Injection',
     'Socket Authorization',
     'Message Privacy',
+    'File Upload & Storage',
   ]);
 
   for (const [cat, stats] of Object.entries(results)) {
@@ -862,6 +959,7 @@ function printReport() {
   await testNoSqlInjection();
   await testSecurityHeaders();
   await testHealthEndpoint();
+  await testFileUploadAndStorage();
 
   // Group 2: Tests that depend on A-B friendship + DM room being intact
   // Run BEFORE any test that calls removeFriend / breaks friendship

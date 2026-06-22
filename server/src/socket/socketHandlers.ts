@@ -14,12 +14,29 @@ const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[
 // ─── Zod schemas for incoming socket payloads ─────────────────────────────────
 
 const incomingMessageSchema = z.object({
-  roomId:     z.string().regex(uuidRegex, 'Invalid Room ID UUID format'),
-  senderId:   z.string().refine((id) => mongoose.Types.ObjectId.isValid(id), 'Invalid Sender ObjectId format'),
-  senderName: z.string().min(1).max(100),
-  content:    z.string().min(1, 'Message cannot be empty').max(2000, 'Message is too long (max 2000 chars)'),
-  replyTo:    z.string().optional(), // ObjectId of message being replied to
-  clientMsgId: z.string().optional(), // Client-side temporary ID for optimistic updates
+  roomId:        z.string().regex(uuidRegex, 'Invalid Room ID UUID format'),
+  senderId:      z.string().refine((id) => mongoose.Types.ObjectId.isValid(id), 'Invalid Sender ObjectId format'),
+  senderName:    z.string().min(1).max(100),
+  content:       z.string().max(2000, 'Message is too long (max 2000 chars)').optional().default(''),
+  replyTo:       z.string().optional(), // ObjectId of message being replied to
+  clientMsgId:   z.string().optional(), // Client-side temporary ID for optimistic updates
+  type:          z.enum(['text', 'image', 'video', 'audio', 'file', 'voice']).optional().default('text'),
+  mediaUrl:      z.string().optional(),
+  mediaFilename: z.string().optional(),
+  mediaMimeType: z.string().optional(),
+  mediaSize:     z.number().optional(),
+  thumbnailUrl:  z.string().optional(),
+}).refine((data) => {
+  if (data.type === 'text' && (!data.content || data.content.trim().length === 0)) {
+    return false;
+  }
+  if (data.type !== 'text' && !data.mediaUrl) {
+    return false;
+  }
+  return true;
+}, {
+  message: 'Text messages cannot be empty, and media messages must have a mediaUrl',
+  path: ['content']
 });
 
 const typingSchema = z.object({
@@ -145,7 +162,20 @@ export const setupSocketHandlers = (io: Server) => {
           return;
         }
 
-        const { roomId, senderId, senderName, content, replyTo, clientMsgId } = data;
+        const {
+          roomId,
+          senderId,
+          senderName,
+          content,
+          replyTo,
+          clientMsgId,
+          type,
+          mediaUrl,
+          mediaFilename,
+          mediaMimeType,
+          mediaSize,
+          thumbnailUrl,
+        } = data;
 
         const room = await getRoomAndVerifyMembership(roomId, userId);
         if (!room) {
@@ -162,7 +192,7 @@ export const setupSocketHandlers = (io: Server) => {
         }
 
         // Sanitize
-        const sanitizedContent = sanitizeContent(content);
+        const sanitizedContent = content ? sanitizeContent(content) : '';
 
         // Validate replyTo if provided
         let replyToId: mongoose.Types.ObjectId | undefined;
@@ -179,13 +209,18 @@ export const setupSocketHandlers = (io: Server) => {
           senderId,
           senderName,
           roomId,
-          type:        'text',
+          type,
           content:     sanitizedContent,
           timestamp:   new Date(),
           replyTo:     replyToId,
           reactions:   [],
           deliveredTo: [],
           readBy:      [],
+          mediaUrl,
+          mediaFilename,
+          mediaMimeType,
+          mediaSize,
+          thumbnailUrl,
         });
 
         // Populate replyTo for broadcast
@@ -195,10 +230,15 @@ export const setupSocketHandlers = (io: Server) => {
         io.to(roomId).emit('message_received', { ...populated.toObject(), clientMsgId });
 
         // Update room preview and lastMessage
+        let previewText = sanitizedContent;
+        if (type !== 'text') {
+          previewText = `[Attachment: ${type}]`;
+        }
+
         ChatRoom.updateOne(
           { roomId },
           {
-            previewText: sanitizedContent,
+            previewText,
             lastMessage: message._id,
             updatedAt:   new Date(),
           }

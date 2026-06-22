@@ -15,13 +15,18 @@ export const authenticate = async (
   next: NextFunction
 ): Promise<void> => {
   try {
+    let token = '';
     const authHeader = req.headers.authorization;
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      throw new AppError('Authentication required. Please log in.', 401);
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.split(' ')[1];
+    } else if (req.query && typeof req.query.token === 'string') {
+      token = req.query.token;
     }
 
-    const token = authHeader.split(' ')[1];
+    if (!token) {
+      throw new AppError('Authentication required. Please log in.', 401);
+    }
     
     try {
       const decoded = verifyToken(token);

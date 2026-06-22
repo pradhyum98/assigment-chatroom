@@ -2,10 +2,18 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { setMessages, clearTyping } from './chatSlice';
 import { clearUnreadCount } from '../rooms/roomsSlice';
-import api from '../../services/api';
+import api, { uploadFile } from '../../services/api';
 import { socketService } from '../../services/socket';
-import { Send, Mic, Plus, CheckCheck, Check, Loader2, Edit2, Trash2, Smile } from 'lucide-react';
+import { Send, Mic, Plus, CheckCheck, Check, Loader2, Edit2, Trash2, Smile, FileText, Download } from 'lucide-react';
 import './Chat.css';
+
+const getMediaUrl = (urlPath: string) => {
+  if (!urlPath) return '';
+  if (urlPath.startsWith('http')) return urlPath;
+  const token = localStorage.getItem('token');
+  const serverUrl = import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace(/\/api$/, '') : 'http://localhost:5001';
+  return `${serverUrl}${urlPath}?token=${token}`;
+};
 
 const ChatWindow: React.FC = () => {
   const dispatch = useAppDispatch();
@@ -15,6 +23,49 @@ const ChatWindow: React.FC = () => {
   const [newMessage, setNewMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    return () => {
+      if (filePreviewUrl) {
+        URL.revokeObjectURL(filePreviewUrl);
+      }
+    };
+  }, [filePreviewUrl]);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const MAX_SIZE = 10 * 1024 * 1024;
+    if (file.size > MAX_SIZE) {
+      alert('File size exceeds the 10MB limit.');
+      return;
+    }
+
+    setSelectedFile(file);
+    if (file.type.startsWith('image/') || file.type.startsWith('video/') || file.type.startsWith('audio/')) {
+      const url = URL.createObjectURL(file);
+      setFilePreviewUrl(url);
+    } else {
+      setFilePreviewUrl(null);
+    }
+  };
+
+  const cancelFileSelection = () => {
+    setSelectedFile(null);
+    if (filePreviewUrl) {
+      URL.revokeObjectURL(filePreviewUrl);
+      setFilePreviewUrl(null);
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
   
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -86,9 +137,14 @@ const ChatWindow: React.FC = () => {
     }
   };
 
-  const handleSendMessage = (e: React.FormEvent) => {
+  const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMessage.trim() || !currentRoom || !user) return;
+    if (!currentRoom || !user) return;
+
+    const hasText = !!newMessage.trim();
+    const hasFile = !!selectedFile;
+
+    if (!hasText && !hasFile) return;
 
     if (editingMessageId) {
       socketService.editMessage({
@@ -101,18 +157,43 @@ const ChatWindow: React.FC = () => {
       return;
     }
 
-    const messageData = {
-      roomId: currentRoom.roomId,
-      senderId: user._id,
-      senderName: `${user.firstName} ${user.lastName}`,
-      content: newMessage.trim(),
-      clientMsgId: Math.random().toString(36).substring(7)
-    };
+    try {
+      let mediaData: { url: string; filename: string; mimetype: string; size: number; type: 'image' | 'video' | 'audio' | 'file' } | null = null;
 
-    socketService.sendMessage(messageData);
-    setNewMessage('');
-    socketService.setTyping({ roomId: currentRoom.roomId, isTyping: false });
-    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      if (selectedFile) {
+        setIsUploading(true);
+        const uploadResult = await uploadFile(selectedFile);
+        mediaData = uploadResult.data;
+        cancelFileSelection();
+      }
+
+      const messageData = {
+        roomId: currentRoom.roomId,
+        senderId: user._id,
+        senderName: `${user.firstName} ${user.lastName}`,
+        content: newMessage.trim(),
+        clientMsgId: Math.random().toString(36).substring(7),
+        ...(mediaData ? {
+          type: mediaData.type,
+          mediaUrl: mediaData.url,
+          mediaFilename: mediaData.filename,
+          mediaMimeType: mediaData.mimetype,
+          mediaSize: mediaData.size,
+        } : {
+          type: 'text'
+        })
+      };
+
+      socketService.sendMessage(messageData);
+      setNewMessage('');
+      socketService.setTyping({ roomId: currentRoom.roomId, isTyping: false });
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      alert(`Failed to send message: ${errorMsg}`);
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   const handleEditClick = (msg: any) => {
@@ -208,7 +289,67 @@ const ChatWindow: React.FC = () => {
               className={`message-bubble ${isSentByMe ? 'sent' : 'received'} ${isDeleted ? 'deleted' : ''}`}
             >
               <div className="message-content">
-                {isDeleted ? <i>This message was deleted</i> : msg.content}
+                {isDeleted ? (
+                  <i>This message was deleted</i>
+                ) : (
+                  <>
+                    {msg.type === 'image' && msg.mediaUrl && (
+                      <div className="media-wrapper">
+                        <img 
+                          src={getMediaUrl(msg.mediaUrl)} 
+                          alt={msg.mediaFilename} 
+                          className="message-image" 
+                          loading="lazy"
+                        />
+                      </div>
+                    )}
+                    {msg.type === 'video' && msg.mediaUrl && (
+                      <div className="media-wrapper">
+                        <video 
+                          src={getMediaUrl(msg.mediaUrl)} 
+                          controls 
+                          className="message-video" 
+                        />
+                      </div>
+                    )}
+                    {msg.type === 'audio' && msg.mediaUrl && (
+                      <div className="media-wrapper">
+                        <audio 
+                          src={getMediaUrl(msg.mediaUrl)} 
+                          controls 
+                          className="message-audio" 
+                        />
+                      </div>
+                    )}
+                    {msg.type === 'file' && msg.mediaUrl && (
+                      <div className="message-file-attachment">
+                        <FileText size={28} />
+                        <div className="file-info">
+                          <a 
+                            href={getMediaUrl(msg.mediaUrl)} 
+                            download={msg.mediaFilename} 
+                            target="_blank" 
+                            rel="noopener noreferrer" 
+                            className="file-link"
+                          >
+                            {msg.mediaFilename}
+                          </a>
+                          <span className="file-size-tag">
+                            ({(msg.mediaSize / 1024 / 1024).toFixed(2)} MB)
+                          </span>
+                        </div>
+                        <a 
+                          href={getMediaUrl(msg.mediaUrl)} 
+                          download={msg.mediaFilename}
+                          className="file-download-btn"
+                        >
+                          <Download size={18} />
+                        </a>
+                      </div>
+                    )}
+                    {msg.content && <p className="text-content">{msg.content}</p>}
+                  </>
+                )}
                 {msg.editedAt && !isDeleted && <span className="edited-tag">(edited)</span>}
               </div>
               
@@ -252,6 +393,26 @@ const ChatWindow: React.FC = () => {
       </div>
 
       <div className="message-input-area">
+        {selectedFile && (
+          <div className="editing-banner">
+            <div className="file-preview-banner">
+              {filePreviewUrl && selectedFile.type.startsWith('image/') && (
+                <img src={filePreviewUrl} alt="Preview" className="preview-thumbnail" />
+              )}
+              {filePreviewUrl && selectedFile.type.startsWith('video/') && (
+                <video src={filePreviewUrl} className="preview-thumbnail" />
+              )}
+              {filePreviewUrl && selectedFile.type.startsWith('audio/') && (
+                <audio src={filePreviewUrl} className="preview-audio-mini" />
+              )}
+              <div className="file-preview-details">
+                <span className="file-name">{selectedFile.name}</span>
+                <span className="file-size">({(selectedFile.size / 1024 / 1024).toFixed(2)} MB)</span>
+              </div>
+              <button type="button" onClick={cancelFileSelection} className="cancel-edit-btn">Cancel</button>
+            </div>
+          </div>
+        )}
         {editingMessageId && (
           <div className="editing-banner">
             <span>Editing message...</span>
@@ -259,7 +420,13 @@ const ChatWindow: React.FC = () => {
           </div>
         )}
         <form onSubmit={handleSendMessage} className="input-container">
-          <button type="button" className="action-btn">
+          <input 
+            type="file"
+            ref={fileInputRef}
+            style={{ display: 'none' }}
+            onChange={handleFileChange}
+          />
+          <button type="button" className="action-btn" onClick={() => fileInputRef.current?.click()} disabled={isUploading}>
             <Plus size={22} />
           </button>
           <input 
@@ -267,11 +434,12 @@ const ChatWindow: React.FC = () => {
             placeholder="Write your message..." 
             value={newMessage}
             onChange={handleInputChange}
+            disabled={isUploading}
           />
           <div className="input-actions">
-            <button type="button" className="action-btn"><Mic size={20} /></button>
-            <button type="submit" className="send-btn" disabled={!newMessage.trim()}>
-              <Send size={18} />
+            <button type="button" className="action-btn" disabled={isUploading}><Mic size={20} /></button>
+            <button type="submit" className="send-btn" disabled={(!newMessage.trim() && !selectedFile) || isUploading}>
+              {isUploading ? <Loader2 className="loading-spinner-mini" style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={18} />}
             </button>
           </div>
         </form>

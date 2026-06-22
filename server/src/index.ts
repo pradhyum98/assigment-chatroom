@@ -9,8 +9,11 @@ import authRoutes from './routes/auth';
 import roomRoutes from './routes/rooms';
 import messageRoutes from './routes/messages';
 import friendsRoutes from './routes/friends';
-import { errorHandler } from './middleware/errorHandler';
+import uploadRoutes from './routes/upload';
+import path from 'path';
+import { authenticate } from './middleware/auth';
 import { logger } from './middleware/logger';
+import { errorHandler } from './middleware/errorHandler';
 import { setupSocketHandlers } from './socket/socketHandlers';
 import { preventNoSqlInjection } from './middleware/validation';
 import { authLimiter, generalLimiter } from './middleware/rateLimiter';
@@ -60,6 +63,10 @@ app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/rooms', generalLimiter, roomRoutes);
 app.use('/api/messages', generalLimiter, messageRoutes);
 app.use('/api/friends', generalLimiter, friendsRoutes);
+app.use('/api/upload', generalLimiter, uploadRoutes);
+
+// Serve the uploads directory statically (gated by authenticate middleware)
+app.use('/uploads', authenticate, express.static(path.join(__dirname, '../uploads')));
 
 // Simple health check endpoint
 app.get('/health', (_req, res) => {
@@ -70,6 +77,7 @@ app.get('/health', (_req, res) => {
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 5001;
+// Start the server listener
 server.listen(PORT, () => {
   logger.info(`Server running on port ${PORT}`);
 });
