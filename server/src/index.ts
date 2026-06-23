@@ -39,6 +39,10 @@ if (!process.env.MONGODB_URI) {
 }
 
 const app = express();
+// REQUIRED for express-rate-limit when deployed behind a reverse proxy (Render, Vercel, Heroku, etc.)
+// Otherwise, req.ip will be the load balancer's IP and every user will share the same rate limit!
+app.set('trust proxy', 1);
+
 const server = createServer(app);
 
 // Strict CORS config for Express
