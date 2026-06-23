@@ -29,7 +29,7 @@ class SocketService {
     }
   }
 
-  sendMessage(data: { roomId: string; senderId: string; senderName: string; content: string }) {
+  sendMessage(data: any) {
     if (this.socket) {
       this.socket.emit('send_message', data);
     }
@@ -47,10 +47,8 @@ class SocketService {
     }
   }
 
-  editMessage(data: { messageId: string; roomId: string; content: string }) {
-    if (this.socket) {
-      this.socket.emit('edit_message', data);
-    }
+  editMessage(data: { messageId: string; roomId: string; content: string; iv?: string }) {
+    this.socket?.emit('edit_message', data);
   }
 
   deleteMessage(data: { messageId: string; roomId: string; deleteForEveryone: boolean }) {
@@ -146,6 +144,68 @@ class SocketService {
   disconnect() {
     if (this.socket) {
       this.socket.disconnect();
+    }
+  }
+
+  // ── WebRTC Signaling ─────────────────────────────────────────────────────
+
+  initiateCall(data: { roomId: string; callType: 'audio' | 'video' }) {
+    if (this.socket) this.socket.emit('call:initiate', data);
+  }
+
+  acceptCall(data: { roomId: string }) {
+    if (this.socket) this.socket.emit('call:accept', data);
+  }
+
+  rejectCall(data: { roomId: string }) {
+    if (this.socket) this.socket.emit('call:reject', data);
+  }
+
+  sendIceCandidate(data: { roomId: string; targetUserId: string; signal: any }) {
+    if (this.socket) this.socket.emit('call:signal', data);
+  }
+
+  endCall(data: { roomId: string }) {
+    if (this.socket) this.socket.emit('call:end', data);
+  }
+
+  onCallIncoming(callback: (data: { roomId: string; callerId: string; callerName: string; callType: 'audio' | 'video' }) => void) {
+    if (this.socket) this.socket.on('call:incoming', callback);
+  }
+
+  onCallAccepted(callback: (data: { roomId: string }) => void) {
+    if (this.socket) this.socket.on('call:accepted', callback);
+  }
+
+  onCallRejected(callback: (data: { roomId: string }) => void) {
+    if (this.socket) this.socket.on('call:rejected', callback);
+  }
+
+  onCallSignal(callback: (data: { roomId: string; senderId: string; signal: any }) => void) {
+    if (this.socket) this.socket.on('call:signal', callback);
+  }
+
+  onCallEnded(callback: (data: { roomId: string }) => void) {
+    if (this.socket) this.socket.on('call:ended', callback);
+  }
+
+  onCallBusy(callback: (data: { roomId: string }) => void) {
+    if (this.socket) this.socket.on('call:busy', callback);
+  }
+
+  onCallOffline(callback: (data: { roomId: string }) => void) {
+    if (this.socket) this.socket.on('call:offline', callback);
+  }
+
+  offCallEvents() {
+    if (this.socket) {
+      this.socket.off('call:incoming');
+      this.socket.off('call:accepted');
+      this.socket.off('call:rejected');
+      this.socket.off('call:signal');
+      this.socket.off('call:ended');
+      this.socket.off('call:busy');
+      this.socket.off('call:offline');
     }
   }
 }

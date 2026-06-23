@@ -6,6 +6,7 @@ export interface Friend {
   firstName: string;
   lastName: string;
   email: string;
+  publicKey?: string;
 }
 
 export interface FriendRequest {

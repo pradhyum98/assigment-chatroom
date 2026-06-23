@@ -5,8 +5,10 @@ import { logout, updateUser } from './features/auth/authSlice';
 import LoginPage from './features/auth/LoginPage';
 import SignupPage from './features/auth/SignupPage';
 import ChatRoom from './features/chat/ChatRoom';
+import { CallProvider } from './features/calls/CallContext';
 import './index.css';
 import api from './services/api';
+import { subscribeToPushNotifications } from './services/pushNotifications';
 
 const ProtectedRoute: React.FC<{ children: React.ReactElement }> = ({ children }) => {
   const { isAuthenticated, loading } = useAppSelector((state) => state.auth);
@@ -34,6 +36,9 @@ const App: React.FC = () => {
       try {
         const { data } = await api.get('/auth/me');
         dispatch(updateUser(data.data.user));
+        
+        // Subscribe to push notifications once successfully authenticated
+        subscribeToPushNotifications();
       } catch (err) {
         console.error('Authentication check failed:', err);
         dispatch(logout());
@@ -53,7 +58,9 @@ const App: React.FC = () => {
           path="/"
           element={
             <ProtectedRoute>
-              <ChatRoom />
+              <CallProvider>
+                <ChatRoom />
+              </CallProvider>
             </ProtectedRoute>
           }
         />

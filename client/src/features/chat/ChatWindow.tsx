@@ -4,7 +4,14 @@ import { setMessages, clearTyping } from './chatSlice';
 import { clearUnreadCount } from '../rooms/roomsSlice';
 import api, { uploadFile } from '../../services/api';
 import { socketService } from '../../services/socket';
-import { Send, Mic, Plus, CheckCheck, Check, Loader2, Edit2, Trash2, Smile, FileText, Download } from 'lucide-react';
+import { Send, Mic, Plus, CheckCheck, Check, Loader2, Edit2, Trash2, Smile, FileText, Download, Phone, Video, MessageSquare, X, Pin } from 'lucide-react';
+import { useCall } from '../calls/CallContext';
+import VoiceRecorder from '../media/VoiceRecorder';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import DOMPurify from 'dompurify';
+import { useCrypto } from '../../hooks/useCrypto';
+import { CryptoService } from '../../services/cryptoService';
 import './Chat.css';
 
 const getMediaUrl = (urlPath: string) => {
@@ -20,13 +27,21 @@ const ChatWindow: React.FC = () => {
   const { currentRoom } = useAppSelector((state) => state.rooms);
   const { user } = useAppSelector((state) => state.auth);
   const { messages, typingUsers } = useAppSelector((state) => state.chat);
+  const { startCall } = useCall();
   const [newMessage, setNewMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [replyingTo, setReplyingTo] = useState<any>(null);
+  const [showPinned, setShowPinned] = useState(false);
+  const [showMembers, setShowMembers] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const { getRoomKey, encryptPayload, decryptPayload } = useCrypto();
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -69,7 +84,9 @@ const ChatWindow: React.FC = () => {
   
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const topOfMessagesRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const observerRef = useRef<IntersectionObserver | null>(null);
 
   const getRoomDisplayName = () => {
     if (!currentRoom) return '';
@@ -89,17 +106,92 @@ const ChatWindow: React.FC = () => {
     return name ? name.charAt(0).toUpperCase() : '';
   };
 
+  const handleStartCall = () => {
+    if (!currentRoom || !currentRoom.isDM) {
+      alert('Calls are only available in Direct Messages for now.');
+      return;
+    }
+    const otherParticipant = currentRoom.participants?.find(
+      (p: any) => p._id !== user?._id
+    );
+    if (!otherParticipant) return;
+    
+    startCall(
+      currentRoom.roomId,
+      otherParticipant._id,
+      `${otherParticipant.firstName} ${otherParticipant.lastName}`,
+      'audio'
+    );
+  };
+
+  const handleStartVideoCall = () => {
+    if (!currentRoom || !currentRoom.isDM) {
+      alert('Calls are only available in Direct Messages for now.');
+      return;
+    }
+    const otherParticipant = currentRoom.participants?.find(
+      (p: any) => p._id !== user?._id
+    );
+    if (!otherParticipant) return;
+    
+    startCall(
+      currentRoom.roomId,
+      otherParticipant._id,
+      `${otherParticipant.firstName} ${otherParticipant.lastName}`,
+      'video'
+    );
+  };
+
   useEffect(() => {
     const fetchMessages = async () => {
       if (!currentRoom) return;
       setIsLoading(true);
       try {
         const response = await api.get(`/messages/${currentRoom.roomId}`);
-        dispatch(setMessages(response.data.data.messages));
+        let fetchedMessages = response.data.data.messages;
+
+        // Decrypt messages if needed
+        const roomKey = await getRoomKey(currentRoom.roomId, currentRoom.encryptedRoomKeys);
+        if (roomKey) {
+          fetchedMessages = await Promise.all(fetchedMessages.map(async (msg: any) => {
+            let processedMsg = { ...msg };
+            
+            if (msg.iv && msg.content) {
+              try {
+                processedMsg.content = await decryptPayload(msg.content, msg.iv, roomKey);
+              } catch (e) {
+                console.error('Failed to decrypt message', msg.messageId, e);
+                processedMsg.content = '[Decryption Failed]';
+              }
+            }
+            
+            if (msg.type !== 'text' && msg.mediaUrl && msg.mediaKey && msg.mediaIv) {
+              try {
+                // Fetch the encrypted file
+                const fileRes = await fetch(getMediaUrl(msg.mediaUrl));
+                const encryptedBlob = await fileRes.blob();
+                const objectUrl = await CryptoService.decryptFile(
+                  encryptedBlob,
+                  msg.mediaKey,
+                  msg.mediaIv,
+                  msg.mediaMimeType || 'application/octet-stream'
+                );
+                processedMsg.decryptedMediaUrl = objectUrl;
+              } catch (e) {
+                console.error('Failed to decrypt media', msg.messageId, e);
+              }
+            }
+
+            return processedMsg;
+          }));
+        }
+
+        dispatch(setMessages(fetchedMessages));
+        setHasMore(response.data.data.pagination.hasMore);
         
         // Mark as read if there are messages
-        if (response.data.data.messages.length > 0 && user) {
-          const unreadMessageIds = response.data.data.messages
+        if (fetchedMessages.length > 0 && user) {
+          const unreadMessageIds = fetchedMessages
             .filter((m: any) => m.senderId !== user._id && !m.readBy?.some((r: any) => r.userId === user._id))
             .map((m: any) => m.messageId || m._id);
             
@@ -118,10 +210,84 @@ const ChatWindow: React.FC = () => {
     fetchMessages();
     dispatch(clearTyping());
     setEditingMessageId(null);
-  }, [currentRoom, dispatch, user]);
+    setReplyingTo(null);
+  }, [currentRoom?.roomId, dispatch, user]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+    if (isLoading || isLoadingMore || !hasMore || !messages.length) return;
+
+    const options = { root: null, rootMargin: '20px', threshold: 1.0 };
+    const observer = new IntersectionObserver((entries) => {
+      const first = entries[0];
+      if (first.isIntersecting && hasMore) {
+        loadMoreMessages();
+      }
+    }, options);
+
+    if (topOfMessagesRef.current) observer.observe(topOfMessagesRef.current);
+    observerRef.current = observer;
+
+    return () => {
+      if (observerRef.current) observerRef.current.disconnect();
+    };
+  }, [messages, hasMore, isLoading, isLoadingMore]);
+
+  const loadMoreMessages = async () => {
+    if (!currentRoom || messages.length === 0) return;
+    setIsLoadingMore(true);
+    try {
+      const beforeDate = messages[0].timestamp;
+      const response = await api.get(`/messages/${currentRoom.roomId}?before=${beforeDate}`);
+      let olderMessages = response.data.data.messages;
+
+      // Decrypt messages if needed
+      const roomKey = await getRoomKey(currentRoom.roomId, currentRoom.encryptedRoomKeys);
+      if (roomKey) {
+        olderMessages = await Promise.all(olderMessages.map(async (msg: any) => {
+          if (msg.iv && msg.content) {
+            try {
+              const decryptedContent = await decryptPayload(msg.content, msg.iv, roomKey);
+              msg.content = decryptedContent;
+            } catch (e) {
+              console.error('Failed to decrypt message', msg.messageId, e);
+              msg.content = '[Decryption Failed]';
+            }
+          }
+          if (msg.type !== 'text' && msg.mediaUrl && msg.mediaKey && msg.mediaIv) {
+            try {
+              const fileRes = await fetch(getMediaUrl(msg.mediaUrl));
+              const encryptedBlob = await fileRes.blob();
+              const objectUrl = await CryptoService.decryptFile(
+                encryptedBlob,
+                msg.mediaKey,
+                msg.mediaIv,
+                msg.mediaMimeType || 'application/octet-stream'
+              );
+              msg.decryptedMediaUrl = objectUrl;
+            } catch (e) {
+              console.error('Failed to decrypt media', msg.messageId, e);
+            }
+          }
+
+          return msg;
+        }));
+      }
+      
+      if (olderMessages.length > 0) {
+        dispatch(setMessages([...olderMessages, ...messages]));
+      }
+      setHasMore(response.data.data.pagination.hasMore);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isLoadingMore) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+    }
   }, [messages, typingUsers]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -147,10 +313,26 @@ const ChatWindow: React.FC = () => {
     if (!hasText && !hasFile) return;
 
     if (editingMessageId) {
+      const roomKey = await getRoomKey(currentRoom.roomId, currentRoom.encryptedRoomKeys);
+      let contentToSend = newMessage.trim();
+      let ivToSend: string | undefined = undefined;
+
+      if (roomKey) {
+        try {
+          const encResult = await encryptPayload(contentToSend, roomKey);
+          contentToSend = encResult.ciphertext;
+          ivToSend = encResult.iv;
+        } catch (e) {
+          console.error("Failed to encrypt edited message", e);
+          return;
+        }
+      }
+
       socketService.editMessage({
         messageId: editingMessageId,
         roomId: currentRoom.roomId,
-        content: newMessage.trim()
+        content: contentToSend,
+        iv: ivToSend
       });
       setEditingMessageId(null);
       setNewMessage('');
@@ -160,25 +342,64 @@ const ChatWindow: React.FC = () => {
     try {
       let mediaData: { url: string; filename: string; mimetype: string; size: number; type: 'image' | 'video' | 'audio' | 'file' } | null = null;
 
+      let mediaKeyToSend: string | undefined = undefined;
+      let mediaIvToSend: string | undefined = undefined;
+
       if (selectedFile) {
         setIsUploading(true);
-        const uploadResult = await uploadFile(selectedFile);
+        // Encrypt the file before uploading
+        const { encryptedBlob, fileKeyBase64, ivBase64 } = await CryptoService.encryptFile(selectedFile);
+        
+        // Convert Blob to File to upload
+        const encryptedFileToUpload = new File([encryptedBlob], selectedFile.name, { type: 'application/octet-stream' });
+        const uploadResult = await uploadFile(encryptedFileToUpload);
         mediaData = uploadResult.data;
+        
+        // Ensure type maps back since we uploaded as octet-stream
+        if (selectedFile.type.startsWith('image/')) mediaData.type = 'image';
+        else if (selectedFile.type.startsWith('video/')) mediaData.type = 'video';
+        else if (selectedFile.type.startsWith('audio/')) mediaData.type = 'audio';
+        else mediaData.type = 'file';
+        
+        mediaData.mimetype = selectedFile.type;
+
+        mediaKeyToSend = fileKeyBase64;
+        mediaIvToSend = ivBase64;
+
         cancelFileSelection();
+      }
+
+      let contentToSend = newMessage.trim();
+      let ivToSend: string | undefined = undefined;
+
+      const roomKey = await getRoomKey(currentRoom.roomId, currentRoom.encryptedRoomKeys);
+      if (roomKey && contentToSend) {
+        try {
+          const encResult = await encryptPayload(contentToSend, roomKey);
+          contentToSend = encResult.ciphertext;
+          ivToSend = encResult.iv;
+        } catch (e) {
+          console.error("Failed to encrypt new message", e);
+          return;
+        }
       }
 
       const messageData = {
         roomId: currentRoom.roomId,
         senderId: user._id,
         senderName: `${user.firstName} ${user.lastName}`,
-        content: newMessage.trim(),
+        content: contentToSend,
+        iv: ivToSend,
         clientMsgId: Math.random().toString(36).substring(7),
+        replyTo: replyingTo ? (replyingTo.messageId || replyingTo._id) : undefined,
         ...(mediaData ? {
           type: mediaData.type,
           mediaUrl: mediaData.url,
           mediaFilename: mediaData.filename,
           mediaMimeType: mediaData.mimetype,
           mediaSize: mediaData.size,
+          mediaKey: mediaKeyToSend,
+          mediaIv: mediaIvToSend,
         } : {
           type: 'text'
         })
@@ -186,11 +407,50 @@ const ChatWindow: React.FC = () => {
 
       socketService.sendMessage(messageData);
       setNewMessage('');
+      setReplyingTo(null);
       socketService.setTyping({ roomId: currentRoom.roomId, isTyping: false });
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : 'Unknown error';
       alert(`Failed to send message: ${errorMsg}`);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleSendVoice = async (audioBlob: Blob) => {
+    if (!currentRoom || !user) return;
+    setIsRecordingVoice(false);
+    setIsUploading(true);
+
+    try {
+      // Encrypt the file before uploading
+      const file = new File([audioBlob], 'voice-message.webm', { type: 'audio/webm' });
+      const { encryptedBlob, fileKeyBase64, ivBase64 } = await CryptoService.encryptFile(file);
+      
+      const encryptedFileToUpload = new File([encryptedBlob], 'voice-message.webm', { type: 'application/octet-stream' });
+      const uploadResult = await uploadFile(encryptedFileToUpload);
+      const mediaData = uploadResult.data;
+
+      const messageData = {
+        roomId: currentRoom.roomId,
+        senderId: user._id,
+        senderName: `${user.firstName} ${user.lastName}`,
+        content: '',
+        clientMsgId: Math.random().toString(36).substring(7),
+        type: 'audio', // Treat voice notes as audio for playback UI
+        mediaUrl: mediaData.url,
+        mediaFilename: mediaData.filename,
+        mediaMimeType: 'audio/webm',
+        mediaSize: mediaData.size,
+        mediaKey: fileKeyBase64,
+        mediaIv: ivBase64,
+      };
+
+      socketService.sendMessage(messageData);
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      alert(`Failed to send voice message: ${errorMsg}`);
     } finally {
       setIsUploading(false);
     }
@@ -222,6 +482,48 @@ const ChatWindow: React.FC = () => {
       roomId: currentRoom.roomId,
       emoji
     });
+  };
+
+  const handlePin = async (msg: any) => {
+    if (!currentRoom) return;
+    try {
+      await api.post(`/messages/${currentRoom.roomId}/pin/${msg.messageId || msg._id}`);
+      await api.get(`/rooms`);
+    } catch (e) {
+      console.error(e);
+      alert('Failed to pin/unpin message');
+    }
+  };
+
+  const handleRemoveMember = async (memberId: string) => {
+    if (!currentRoom) return;
+    
+    try {
+      // Create new room keys for remaining participants
+      const remainingParticipants = currentRoom.participants.filter((p: any) => p._id !== memberId);
+      
+      const newRoomKey = await CryptoService.generateRoomKey();
+      const newRoomKeyBase64 = await CryptoService.exportRoomKey(newRoomKey);
+      const encryptedRoomKeys: Record<string, string> = {};
+      
+      for (const p of remainingParticipants) {
+        if (p.publicKey) {
+          const encryptedKey = await CryptoService.encryptRoomKeyForUser(newRoomKeyBase64, p.publicKey);
+          encryptedRoomKeys[p._id] = encryptedKey;
+        }
+      }
+
+      await api.delete(`/rooms/${currentRoom.roomId}/members/${memberId}`, {
+        data: { encryptedRoomKeys }
+      });
+      
+      alert('Member removed and keys rotated successfully.');
+      setShowMembers(false);
+      // Let the room fetch update the state, or trigger a fetch
+      await api.get(`/rooms`);
+    } catch (err: any) {
+      alert(`Failed to remove member: ${err.response?.data?.message || err.message}`);
+    }
   };
 
   if (!currentRoom) return (
@@ -259,9 +561,59 @@ const ChatWindow: React.FC = () => {
           </div>
         </div>
         <div className="header-actions">
-          <button className="action-btn"><Mic size={20} /></button>
+          <button className={`action-btn ${showPinned ? 'active' : ''}`} onClick={() => setShowPinned(!showPinned)} title="Pinned Messages">
+            <Pin size={20} />
+          </button>
+          {currentRoom.isDM ? (
+            <>
+              <button className="action-btn" onClick={handleStartCall} title="Start Voice Call">
+                <Phone size={20} />
+              </button>
+              <button className="action-btn" onClick={handleStartVideoCall} title="Start Video Call">
+                <Video size={20} />
+              </button>
+            </>
+          ) : (
+            <button className={`action-btn ${showMembers ? 'active' : ''}`} onClick={() => setShowMembers(!showMembers)} title="Group Members">
+              <MessageSquare size={20} />
+            </button>
+          )}
         </div>
       </header>
+
+      {showPinned && currentRoom.pinnedMessages && currentRoom.pinnedMessages.length > 0 && (
+        <div className="pinned-messages-list">
+          <h4>Pinned Messages</h4>
+          {currentRoom.pinnedMessages.map((msgId: string) => {
+            const msg = messages.find((m: any) => m._id === msgId || m.messageId === msgId);
+            if (!msg) return <div key={msgId} className="pinned-item">Message {msgId}</div>;
+            return (
+              <div key={msgId} className="pinned-item">
+                <strong>{msg.senderName}:</strong> {msg.type === 'text' ? msg.content : `[${msg.type}]`}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {showMembers && !currentRoom.isDM && (
+        <div className="pinned-messages-list">
+          <h4>Group Members</h4>
+          {currentRoom.participants.map((p: any) => (
+            <div key={p._id} className="pinned-item" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>{p.firstName} {p.lastName} {p._id === user?._id ? '(You)' : ''}</span>
+              {(currentRoom as any).admins?.includes(user?._id) && p._id !== user?._id && (
+                <button 
+                  onClick={() => handleRemoveMember(p._id)}
+                  style={{ background: 'transparent', border: '1px solid #ef4444', color: '#ef4444', padding: '2px 8px', borderRadius: '4px', cursor: 'pointer' }}
+                >
+                  Remove
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="messages-area">
         {isLoading && (
@@ -270,6 +622,12 @@ const ChatWindow: React.FC = () => {
           </div>
         )}
         
+        {hasMore && !isLoading && (
+          <div ref={topOfMessagesRef} className="loading-more-indicator">
+            {isLoadingMore ? <Loader2 className="loading-spinner-mini spin" /> : 'Load more...'}
+          </div>
+        )}
+
         <div className="date-separator">
           <span>Today</span>
         </div>
@@ -283,6 +641,16 @@ const ChatWindow: React.FC = () => {
           const isRead = msg.readBy && msg.readBy.length > 0;
           const isDelivered = msg.deliveredTo && msg.deliveredTo.length > 0;
 
+          const isSystem = msg.senderName === 'System';
+
+          if (isSystem) {
+            return (
+              <div key={msg.messageId || msg._id || idx} className="system-message-bubble fade-in">
+                <span className="system-message-content">{msg.content}</span>
+              </div>
+            );
+          }
+
           return (
             <div 
               key={msg.messageId || msg._id || idx} 
@@ -293,10 +661,18 @@ const ChatWindow: React.FC = () => {
                   <i>This message was deleted</i>
                 ) : (
                   <>
+                    {msg.replyTo && (
+                      <div className="replied-to-quote">
+                        <div className="replied-to-sender">{msg.replyTo.senderName}</div>
+                        <div className="replied-to-content">
+                          {msg.replyTo.type === 'text' ? msg.replyTo.content : `[${msg.replyTo.type}]`}
+                        </div>
+                      </div>
+                    )}
                     {msg.type === 'image' && msg.mediaUrl && (
                       <div className="media-wrapper">
                         <img 
-                          src={getMediaUrl(msg.mediaUrl)} 
+                          src={msg.decryptedMediaUrl || getMediaUrl(msg.mediaUrl)} 
                           alt={msg.mediaFilename} 
                           className="message-image" 
                           loading="lazy"
@@ -306,7 +682,7 @@ const ChatWindow: React.FC = () => {
                     {msg.type === 'video' && msg.mediaUrl && (
                       <div className="media-wrapper">
                         <video 
-                          src={getMediaUrl(msg.mediaUrl)} 
+                          src={msg.decryptedMediaUrl || getMediaUrl(msg.mediaUrl)} 
                           controls 
                           className="message-video" 
                         />
@@ -315,7 +691,7 @@ const ChatWindow: React.FC = () => {
                     {msg.type === 'audio' && msg.mediaUrl && (
                       <div className="media-wrapper">
                         <audio 
-                          src={getMediaUrl(msg.mediaUrl)} 
+                          src={msg.decryptedMediaUrl || getMediaUrl(msg.mediaUrl)} 
                           controls 
                           className="message-audio" 
                         />
@@ -326,7 +702,7 @@ const ChatWindow: React.FC = () => {
                         <FileText size={28} />
                         <div className="file-info">
                           <a 
-                            href={getMediaUrl(msg.mediaUrl)} 
+                            href={msg.decryptedMediaUrl || getMediaUrl(msg.mediaUrl)} 
                             download={msg.mediaFilename} 
                             target="_blank" 
                             rel="noopener noreferrer" 
@@ -339,7 +715,7 @@ const ChatWindow: React.FC = () => {
                           </span>
                         </div>
                         <a 
-                          href={getMediaUrl(msg.mediaUrl)} 
+                          href={msg.decryptedMediaUrl || getMediaUrl(msg.mediaUrl)} 
                           download={msg.mediaFilename}
                           className="file-download-btn"
                         >
@@ -347,7 +723,13 @@ const ChatWindow: React.FC = () => {
                         </a>
                       </div>
                     )}
-                    {msg.content && <p className="text-content">{msg.content}</p>}
+                    {msg.content && (
+                      <div className="text-content markdown-body">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {DOMPurify.sanitize(msg.content)}
+                        </ReactMarkdown>
+                      </div>
+                    )}
                   </>
                 )}
                 {msg.editedAt && !isDeleted && <span className="edited-tag">(edited)</span>}
@@ -356,6 +738,8 @@ const ChatWindow: React.FC = () => {
               {!isDeleted && (
                 <div className="message-actions-overlay">
                   <button onClick={() => handleReact(msg, '👍')} title="React 👍"><Smile size={14} /></button>
+                  <button onClick={() => setReplyingTo(msg)} title="Reply"><MessageSquare size={14} /></button>
+                  <button onClick={() => handlePin(msg)} title="Pin/Unpin"><Pin size={14} /></button>
                   {isSentByMe && (
                     <>
                       <button onClick={() => handleEditClick(msg)} title="Edit"><Edit2 size={14} /></button>
@@ -413,6 +797,17 @@ const ChatWindow: React.FC = () => {
             </div>
           </div>
         )}
+        {replyingTo && (
+          <div className="editing-banner">
+            <div className="file-preview-banner">
+              <div className="file-preview-details">
+                <span className="file-name">Replying to {replyingTo.senderName}</span>
+                <span className="file-size">{replyingTo.type === 'text' ? replyingTo.content : `[${replyingTo.type}]`}</span>
+              </div>
+              <button onClick={() => setReplyingTo(null)} className="cancel-edit-btn"><X size={16}/></button>
+            </div>
+          </div>
+        )}
         {editingMessageId && (
           <div className="editing-banner">
             <span>Editing message...</span>
@@ -420,28 +815,39 @@ const ChatWindow: React.FC = () => {
           </div>
         )}
         <form onSubmit={handleSendMessage} className="input-container">
-          <input 
-            type="file"
-            ref={fileInputRef}
-            style={{ display: 'none' }}
-            onChange={handleFileChange}
-          />
-          <button type="button" className="action-btn" onClick={() => fileInputRef.current?.click()} disabled={isUploading}>
-            <Plus size={22} />
-          </button>
-          <input 
-            type="text" 
-            placeholder="Write your message..." 
-            value={newMessage}
-            onChange={handleInputChange}
-            disabled={isUploading}
-          />
-          <div className="input-actions">
-            <button type="button" className="action-btn" disabled={isUploading}><Mic size={20} /></button>
-            <button type="submit" className="send-btn" disabled={(!newMessage.trim() && !selectedFile) || isUploading}>
-              {isUploading ? <Loader2 className="loading-spinner-mini" style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={18} />}
-            </button>
-          </div>
+          {isRecordingVoice ? (
+            <VoiceRecorder 
+              onSend={handleSendVoice} 
+              onCancel={() => setIsRecordingVoice(false)} 
+            />
+          ) : (
+            <>
+              <input 
+                type="file"
+                ref={fileInputRef}
+                style={{ display: 'none' }}
+                onChange={handleFileChange}
+              />
+              <button type="button" className="action-btn" onClick={() => fileInputRef.current?.click()} disabled={isUploading}>
+                <Plus size={22} />
+              </button>
+              <input 
+                type="text" 
+                placeholder="Write your message..." 
+                value={newMessage}
+                onChange={handleInputChange}
+                disabled={isUploading}
+              />
+              <div className="input-actions">
+                <button type="button" className="action-btn" onClick={() => setIsRecordingVoice(true)} disabled={isUploading} title="Record Voice Message">
+                  <Mic size={20} />
+                </button>
+                <button type="submit" className="send-btn" disabled={(!newMessage.trim() && !selectedFile) || isUploading}>
+                  {isUploading ? <Loader2 className="loading-spinner-mini" style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={18} />}
+                </button>
+              </div>
+            </>
+          )}
         </form>
       </div>
     </div>

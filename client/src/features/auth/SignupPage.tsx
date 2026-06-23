@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { loginStart, loginSuccess, loginFailure } from './authSlice';
 import api from '../../services/api';
+import { CryptoService } from '../../services/cryptoService';
 import './Auth.css';
 
 const SignupPage: React.FC = () => {
@@ -24,7 +25,19 @@ const SignupPage: React.FC = () => {
     e.preventDefault();
     dispatch(loginStart());
     try {
-      const response = await api.post('/auth/signup', formData);
+      // Generate E2EE Keys
+      const keyPair = await CryptoService.generateUserKeyPair();
+      const publicKey = await CryptoService.exportPublicKey(keyPair.publicKey);
+      const privateKey = await CryptoService.exportPrivateKey(keyPair.privateKey);
+
+      // Encrypt private key with user password (PBKDF2)
+      const encryptedPrivateKey = await CryptoService.encryptPrivateKeyWithPassword(privateKey, formData.password, formData.email);
+
+      // Save private key locally for current session
+      localStorage.setItem('e2e_private_key', privateKey);
+
+      const payload = { ...formData, publicKey, encryptedPrivateKey };
+      const response = await api.post('/auth/signup', payload);
       dispatch(loginSuccess(response.data.data));
       navigate('/');
     } catch (err: any) {

@@ -14,8 +14,10 @@ export interface Room {
   isPrivate?: boolean;
   isOnline?: boolean;
   lastSeen?: string;
+  encryptedRoomKeys?: Record<string, string>;
   unreadCounts?: Record<string, number>;
   unreadCount?: number; // legacy/derived
+  pinnedMessages?: any[];
 }
 
 interface RoomsState {
@@ -86,8 +88,15 @@ const roomsSlice = createSlice({
         }
       }
     },
+    updatePinnedMessages: (state, action: PayloadAction<{ roomId: string; pinnedMessages: any[] }>) => {
+      const room = state.rooms.find(r => r.roomId === action.payload.roomId);
+      if (room) room.pinnedMessages = action.payload.pinnedMessages;
+      if (state.currentRoom?.roomId === action.payload.roomId) {
+        state.currentRoom.pinnedMessages = action.payload.pinnedMessages;
+      }
+    },
   },
 });
 
-export const { setRooms, setCurrentRoom, addRoom, setLoading, setError, updateRoomPreview, clearUnreadCount, updatePresence } = roomsSlice.actions;
+export const { setRooms, setCurrentRoom, addRoom, setLoading, setError, updateRoomPreview, clearUnreadCount, updatePresence, updatePinnedMessages } = roomsSlice.actions;
 export default roomsSlice.reducer;

@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { setCurrentRoom, addRoom } from './roomsSlice';
 import type { Room } from './roomsSlice';
 import { clearMessages } from '../chat/chatSlice';
 import { logout } from '../auth/authSlice';
 import api from '../../services/api';
+import { CryptoService } from '../../services/cryptoService';
 import { Search, Plus, User, LogOut, Users } from 'lucide-react';
 import FriendsModal from '../friends/FriendsModal';
 import './Sidebar.css';
@@ -23,6 +24,22 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
   const [showFriendsModal, setShowFriendsModal] = useState(false);
   const [newRoomName, setNewRoomName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
+  const [friendsList, setFriendsList] = useState<any[]>([]);
+  const [selectedFriends, setSelectedFriends] = useState<string[]>([]);
+  
+  // Fetch friends when create modal opens
+  useEffect(() => {
+    if (showCreateModal) {
+      api.get('/friends/list').then(res => {
+        setFriendsList(res.data.data.friends || []);
+      }).catch(err => {
+        console.error('Failed to fetch friends for group creation', err);
+      });
+    } else {
+      setNewRoomName('');
+      setSelectedFriends([]);
+    }
+  }, [showCreateModal]);
 
   const getRoomDisplayName = (room: Room) => {
     if (room.isDM) {
@@ -65,11 +82,46 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
     setIsCreating(true);
 
     try {
-      const response = await api.post('/rooms', { roomName: newRoomName });
+      // 1. Generate new AES Room Key
+      const roomKey = await CryptoService.generateRoomKey();
+      const roomKeyBase64 = await CryptoService.exportRoomKey(roomKey);
+
+      // 2. Map of userId -> encrypted room key
+      const encryptedRoomKeys: Record<string, string> = {};
+
+      // Ensure current user is in participants list for encryption
+      const allParticipants = [user?._id, ...selectedFriends].filter(Boolean) as string[];
+
+      // Build a map of public keys from our friendsList, plus current user
+      const pubKeyMap: Record<string, string> = {};
+      if (user?._id && user?.publicKey) pubKeyMap[user._id] = user.publicKey;
+      
+      friendsList.forEach(f => {
+        if (f.publicKey) {
+          pubKeyMap[f._id] = f.publicKey;
+        }
+      });
+
+      // 3. Encrypt room key for each participant
+      for (const pId of allParticipants) {
+        const pubKey = pubKeyMap[pId];
+        if (pubKey) {
+          encryptedRoomKeys[pId] = await CryptoService.encryptRoomKeyForUser(roomKeyBase64, pubKey);
+        } else {
+          console.warn(`No public key for participant ${pId}, they won't be able to decrypt messages.`);
+        }
+      }
+
+      const response = await api.post('/rooms', { 
+        roomName: newRoomName,
+        participants: selectedFriends,
+        encryptedRoomKeys
+      });
       const createdRoom = response.data.data.room;
       dispatch(addRoom(createdRoom));
       dispatch(setCurrentRoom(createdRoom));
       setNewRoomName('');
+      setSelectedFriends([]);
       setShowCreateModal(false);
     } catch (err) {
       console.error('Failed to create room', err);
@@ -218,7 +270,37 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
                   required
                 />
               </div>
-              <div className="modal-actions">
+              <div className="form-group" style={{ marginTop: '16px' }}>
+                <label>Select Participants</label>
+                <div className="friends-selection-list" style={{ maxHeight: '150px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '8px', marginTop: '8px' }}>
+                  {friendsList.length > 0 ? (
+                    friendsList.map(friend => (
+                      <div key={friend._id} style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
+                        <input
+                          type="checkbox"
+                          id={`friend-${friend._id}`}
+                          value={friend._id}
+                          checked={selectedFriends.includes(friend._id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedFriends([...selectedFriends, friend._id]);
+                            } else {
+                              setSelectedFriends(selectedFriends.filter(id => id !== friend._id));
+                            }
+                          }}
+                          style={{ marginRight: '8px' }}
+                        />
+                        <label htmlFor={`friend-${friend._id}`} style={{ margin: 0, cursor: 'pointer', fontSize: '14px' }}>
+                          {friend.firstName} {friend.lastName}
+                        </label>
+                      </div>
+                    ))
+                  ) : (
+                    <div style={{ fontSize: '13px', color: '#94A3B8', padding: '4px' }}>No friends available to add.</div>
+                  )}
+                </div>
+              </div>
+              <div className="modal-actions" style={{ marginTop: '24px' }}>
                 <button type="button" onClick={() => setShowCreateModal(false)} className="btn-secondary" disabled={isCreating}>Cancel</button>
                 <button type="submit" className="btn-primary" disabled={isCreating}>
                   {isCreating ? 'Creating...' : 'Create'}

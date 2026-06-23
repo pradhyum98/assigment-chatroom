@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { loginStart, loginSuccess, loginFailure } from './authSlice';
 import api from '../../services/api';
+import { CryptoService } from '../../services/cryptoService';
 import './Auth.css';
 
 const LoginPage: React.FC = () => {
@@ -16,7 +17,44 @@ const LoginPage: React.FC = () => {
     e.preventDefault();
     dispatch(loginStart());
     try {
-      const response = await api.post('/auth/login', { email, password });
+      // First authenticate without public key to fetch the user profile
+      let response = await api.post('/auth/login', { email, password });
+      const { user } = response.data.data;
+
+      let privateKey = '';
+      let publicKey = '';
+
+      if (user.encryptedPrivateKey && user.publicKey) {
+        try {
+          privateKey = await CryptoService.decryptPrivateKeyWithPassword(
+            user.encryptedPrivateKey,
+            password,
+            email
+          );
+          publicKey = user.publicKey;
+        } catch (err) {
+          console.warn('Failed to decrypt private key. Generating new keypair...', err);
+          const keyPair = await CryptoService.generateUserKeyPair();
+          publicKey = await CryptoService.exportPublicKey(keyPair.publicKey);
+          privateKey = await CryptoService.exportPrivateKey(keyPair.privateKey);
+          
+          const encryptedPrivateKey = await CryptoService.encryptPrivateKeyWithPassword(privateKey, password, email);
+          // Update keys on server
+          response = await api.post('/auth/login', { email, password, publicKey, encryptedPrivateKey });
+        }
+      } else {
+        // Legacy user or new device without backed up keys
+        const keyPair = await CryptoService.generateUserKeyPair();
+        publicKey = await CryptoService.exportPublicKey(keyPair.publicKey);
+        privateKey = await CryptoService.exportPrivateKey(keyPair.privateKey);
+        
+        const encryptedPrivateKey = await CryptoService.encryptPrivateKeyWithPassword(privateKey, password, email);
+        // Update keys on server
+        response = await api.post('/auth/login', { email, password, publicKey, encryptedPrivateKey });
+      }
+
+      // Save private key locally for current session
+      localStorage.setItem('e2e_private_key', privateKey);
       dispatch(loginSuccess(response.data.data));
       navigate('/');
     } catch (err: any) {

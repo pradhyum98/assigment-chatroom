@@ -8,6 +8,7 @@ import {
 } from './friendsSlice';
 import { addRoom, setCurrentRoom } from '../rooms/roomsSlice';
 import api from '../../services/api';
+import { CryptoService } from '../../services/cryptoService';
 import { X, Search, Check, Trash2, Send, MessageSquare } from 'lucide-react';
 import './Friends.css';
 
@@ -112,7 +113,27 @@ const FriendsModal: React.FC<FriendsModalProps> = ({ onClose }) => {
   const handleStartDM = async (friendId: string) => {
     setActionLoading(friendId);
     try {
-      const response = await api.post(`/rooms/dm/${friendId}`);
+      // Find the friend in the friends array to get their publicKey
+      const friend = friends.find(f => f._id === friendId);
+      
+      // 1. Generate new AES Room Key
+      const roomKey = await CryptoService.generateRoomKey();
+      const roomKeyBase64 = await CryptoService.exportRoomKey(roomKey);
+
+      // 2. Encrypt for both current user and friend
+      const encryptedRoomKeys: Record<string, string> = {};
+      
+      if (currentUser?.publicKey) {
+        encryptedRoomKeys[currentUser._id] = await CryptoService.encryptRoomKeyForUser(roomKeyBase64, currentUser.publicKey);
+      }
+      
+      if (friend?.publicKey) {
+        encryptedRoomKeys[friendId] = await CryptoService.encryptRoomKeyForUser(roomKeyBase64, friend.publicKey);
+      } else {
+        console.warn('Friend has no public key, they will not be able to decrypt the room messages');
+      }
+
+      const response = await api.post(`/rooms/dm/${friendId}`, { encryptedRoomKeys });
       const room = response.data.data.room;
       dispatch(addRoom(room));
       dispatch(setCurrentRoom(room));

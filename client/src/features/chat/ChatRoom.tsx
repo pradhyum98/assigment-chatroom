@@ -6,12 +6,15 @@ import { socketService } from '../../services/socket';
 import { addMessage, updateMessage, deleteMessage, updateMessageReactions, updateMessageReceipts, setTyping } from './chatSlice';
 import api from '../../services/api';
 import { setRooms, updateRoomPreview, updatePresence } from '../rooms/roomsSlice';
+import { useCrypto } from '../../hooks/useCrypto';
 import './Chat.css';
 
 const ChatRoom: React.FC = () => {
   const dispatch = useAppDispatch();
   const { currentRoom } = useAppSelector((state) => state.rooms);
+   
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const { getRoomKey, decryptPayload } = useCrypto();
 
   useEffect(() => {
     // Initial data fetch
@@ -47,23 +50,70 @@ const ChatRoom: React.FC = () => {
 
   useEffect(() => {
     // Handle incoming messages for current room
-    const handleMessage = (message: any) => {
+    const handleMessage = async (message: any) => {
+      let content = message.content;
+      if (message.iv && currentRoom && message.roomId === currentRoom.roomId) {
+        const roomKey = await getRoomKey(currentRoom.roomId, currentRoom.encryptedRoomKeys);
+        if (roomKey) {
+          try {
+            content = await decryptPayload(message.content, message.iv, roomKey);
+          } catch (e) {
+            console.error('Failed to decrypt incoming message', e);
+            content = '[Decryption Failed]';
+          }
+        }
+      }
+
+      let decryptedMediaUrl = undefined;
+      if (message.type !== 'text' && message.mediaUrl && message.mediaKey && message.mediaIv) {
+        try {
+          const serverUrl = import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace(/\/api$/, '') : 'http://localhost:5001';
+          const token = localStorage.getItem('token');
+          const fileUrl = message.mediaUrl.startsWith('http') ? message.mediaUrl : `${serverUrl}${message.mediaUrl}?token=${token}`;
+          
+          const fileRes = await fetch(fileUrl);
+          const encryptedBlob = await fileRes.blob();
+          const { CryptoService } = await import('../../services/cryptoService');
+          decryptedMediaUrl = await CryptoService.decryptFile(
+            encryptedBlob,
+            message.mediaKey,
+            message.mediaIv,
+            message.mediaMimeType || 'application/octet-stream'
+          );
+        } catch (e) {
+          console.error('Failed to decrypt incoming media', e);
+        }
+      }
+
       // Update room preview globally
       dispatch(updateRoomPreview({
         roomId: message.roomId,
-        previewText: message.content,
+        previewText: content,
         unreadIncrementFor: message.roomId !== currentRoom?.roomId ? undefined : undefined // Need to handle unread better, skipping here for now since backend increments
       }));
 
       if (currentRoom && message.roomId === currentRoom.roomId) {
-        dispatch(addMessage(message));
+        dispatch(addMessage({ ...message, content, decryptedMediaUrl }));
       }
     };
 
-    const handleMessageEdited = (data: any) => {
-      dispatch(updateRoomPreview({ roomId: data.roomId, previewText: data.content }));
+    const handleMessageEdited = async (data: any) => {
+      let content = data.content;
+      if (data.iv && currentRoom && data.roomId === currentRoom.roomId) {
+        const roomKey = await getRoomKey(currentRoom.roomId, currentRoom.encryptedRoomKeys);
+        if (roomKey) {
+          try {
+            content = await decryptPayload(data.content, data.iv, roomKey);
+          } catch (e) {
+            console.error('Failed to decrypt edited message', e);
+            content = '[Decryption Failed]';
+          }
+        }
+      }
+      
+      dispatch(updateRoomPreview({ roomId: data.roomId, previewText: content }));
       if (currentRoom && data.roomId === currentRoom.roomId) {
-        dispatch(updateMessage(data));
+        dispatch(updateMessage({ ...data, content }));
       }
     };
 
