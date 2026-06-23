@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { setMessages, clearTyping } from './chatSlice';
-import { clearUnreadCount } from '../rooms/roomsSlice';
+import { clearUnreadCount, setCurrentRoom } from '../rooms/roomsSlice';
 import api, { uploadFile } from '../../services/api';
 import { socketService } from '../../services/socket';
-import { Send, Mic, Plus, CheckCheck, Check, Loader2, Edit2, Trash2, Smile, FileText, Download, Phone, Video, MessageSquare, X, Pin } from 'lucide-react';
+import { Send, Mic, Plus, CheckCheck, Check, Loader2, Edit2, Trash2, Smile, FileText, Download, Phone, Video, MessageSquare, X, Pin, ArrowLeft } from 'lucide-react';
 import { useCall } from '../calls/CallContext';
 import VoiceRecorder from '../media/VoiceRecorder';
 import ReactMarkdown from 'react-markdown';
@@ -544,6 +544,13 @@ const ChatWindow: React.FC = () => {
     <div className="chat-window fade-in">
       <header className="chat-header">
         <div className="chat-user-info">
+          <button 
+            className="back-btn mobile-only" 
+            onClick={() => dispatch(setCurrentRoom(null))}
+            title="Back to rooms"
+          >
+            <ArrowLeft size={20} />
+          </button>
           <div className="avatar-wrapper">
             <div 
               className="chat-avatar"

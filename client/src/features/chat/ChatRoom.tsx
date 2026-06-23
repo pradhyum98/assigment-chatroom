@@ -166,7 +166,7 @@ const ChatRoom: React.FC = () => {
   }, [dispatch, currentRoom]);
 
   return (
-    <div className="chat-layout">
+    <div className={`chat-layout ${currentRoom ? 'has-room' : 'no-room'}`}>
       <Sidebar 
         isOpen={isSidebarOpen} 
         onClose={() => setIsSidebarOpen(false)} 
