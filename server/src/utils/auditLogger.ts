@@ -36,4 +36,7 @@ export const auditLog = {
   rateLimitViolation: (ip: string, category: string, url: string) => {
     logger.warn(`[SECURITY AUDIT] Rate limit violation. IP: ${ip} | Category: ${category} | URL: ${url}`);
   },
+  passwordRecoveryAccessed: (adminEmail: string, userId: string, reason: string) => {
+    logger.warn(`[SECURITY AUDIT] ACCOUNT RECOVERY INVOKED. Admin: ${adminEmail} | Target User: ${userId} | Reason: ${reason}`);
+  },
 };

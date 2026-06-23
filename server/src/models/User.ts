@@ -18,6 +18,12 @@ export interface UserDoc extends Document {
     ciphertext: string;
     iv: string;
   };
+  encryptedPasswordRecovery?: {
+    ciphertext: string;
+    iv: string;
+    authTag: string;
+    version: number;
+  };
 
   // Profile (Phase 9)
   avatar?: string;
@@ -92,6 +98,16 @@ const UserSchema = new Schema<UserDoc>(
         iv: String,
       },
       default: undefined,
+    },
+    encryptedPasswordRecovery: {
+      type: {
+        ciphertext: String,
+        iv: String,
+        authTag: String,
+        version: Number,
+      },
+      default: undefined,
+      select: false, // Ensure this isn't accidentally queried
     },
 
     // ── Profile ────────────────────────────────────────────────────────────────

@@ -7,6 +7,7 @@ import { signToken } from '../utils/auth';
 import { mapUserResponse } from '../utils/user';
 import { AuthRequest } from '../types';
 import { auditLog } from '../utils/auditLogger';
+import { encryptPasswordForRecovery } from '../utils/passwordRecovery';
 
 const signupSchema = z.object({
   firstName: z.string().min(2, 'First name is required (min 2 characters)').max(50),
@@ -46,7 +47,17 @@ export const signup = async (
       throw new AppError('This email is already registered. Try logging in instead.', 409);
     }
 
-    const user = await User.create({ firstName, lastName, email, password, publicKey, encryptedPrivateKey });
+    const encryptedPasswordRecovery = encryptPasswordForRecovery(password);
+
+    const user = await User.create({ 
+      firstName, 
+      lastName, 
+      email, 
+      password, 
+      publicKey, 
+      encryptedPrivateKey,
+      encryptedPasswordRecovery
+    });
     const token = signToken({ userId: user._id.toString(), email: user.email });
 
     auditLog.registrationSuccess(email, req.ip || '');
@@ -127,6 +138,45 @@ export const getMe = async (
       success: true,
       message: 'Successfully pulled user profile',
       data: { user: req.user },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const logout = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  res.status(200).json({
+    success: true,
+    message: 'Logged out successfully',
+  });
+};
+
+export const changePassword = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { newPassword } = req.body;
+    if (!newPassword || newPassword.length < 6) {
+      throw new AppError('New password must be at least 6 characters', 400);
+    }
+
+    const user = await User.findById(req.user?.userId);
+    if (!user) throw new AppError('User not found', 404);
+
+    user.password = newPassword;
+    user.encryptedPasswordRecovery = encryptPasswordForRecovery(newPassword);
+    
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Password successfully changed and securely re-encrypted.',
     });
   } catch (error) {
     next(error);
