@@ -49,26 +49,30 @@ const typingSchema = z.object({
   isTyping: z.boolean(),
 });
 
+const isUuidOrObjectId = (id: string) => {
+  return uuidRegex.test(id) || mongoose.Types.ObjectId.isValid(id);
+};
+
 const markReadSchema = z.object({
   roomId:      z.string().regex(uuidRegex, 'Invalid Room ID format'),
   messageIds:  z.array(z.string()).min(1).max(100),
 });
 
 const reactSchema = z.object({
-  messageId: z.string().refine((id) => mongoose.Types.ObjectId.isValid(id), 'Invalid message ID'),
+  messageId: z.string().refine(isUuidOrObjectId, 'Invalid message ID'),
   roomId:    z.string().regex(uuidRegex, 'Invalid Room ID format'),
   emoji:     z.string().min(1).max(10),
 });
 
 const editMsgSchema = z.object({
-  messageId: z.string().refine((id) => mongoose.Types.ObjectId.isValid(id), 'Invalid message ID'),
+  messageId: z.string().refine(isUuidOrObjectId, 'Invalid message ID'),
   roomId:    z.string().regex(uuidRegex, 'Invalid Room ID format'),
   content:   z.string().min(1).max(2000),
   iv:        z.string().optional(),
 });
 
 const deleteMsgSchema = z.object({
-  messageId:         z.string().refine((id) => mongoose.Types.ObjectId.isValid(id), 'Invalid message ID'),
+  messageId:         z.string().refine(isUuidOrObjectId, 'Invalid message ID'),
   roomId:            z.string().regex(uuidRegex, 'Invalid Room ID format'),
   deleteForEveryone: z.boolean().optional().default(false),
 });
@@ -244,10 +248,15 @@ export const setupSocketHandlers = (io: Server) => {
 
         // Validate replyTo if provided
         let replyToId: mongoose.Types.ObjectId | undefined;
-        if (replyTo && mongoose.Types.ObjectId.isValid(replyTo)) {
-          const referenced = await Message.findById(replyTo).lean();
+        if (replyTo) {
+          let referenced = null;
+          if (mongoose.Types.ObjectId.isValid(replyTo)) {
+            referenced = await Message.findById(replyTo).lean();
+          } else {
+            referenced = await Message.findOne({ messageId: replyTo }).lean();
+          }
           if (referenced && referenced.roomId === roomId) {
-            replyToId = new mongoose.Types.ObjectId(replyTo);
+            replyToId = referenced._id as mongoose.Types.ObjectId;
           }
         }
 
@@ -356,13 +365,41 @@ export const setupSocketHandlers = (io: Server) => {
         const userObjectId = new mongoose.Types.ObjectId(userId);
         const now = new Date();
 
+        const readObjectIds: mongoose.Types.ObjectId[] = [];
+        const readUuids: string[] = [];
+        for (const id of messageIds) {
+          if (mongoose.Types.ObjectId.isValid(id)) {
+            readObjectIds.push(new mongoose.Types.ObjectId(id));
+          } else {
+            readUuids.push(id);
+          }
+        }
+
+        const readQuery: any = {
+          roomId,
+          'readBy.userId': { $ne: userObjectId },
+          $or: []
+        };
+
+        if (readObjectIds.length > 0) {
+          readQuery.$or.push({ _id: { $in: readObjectIds } });
+        }
+        if (readUuids.length > 0) {
+          readQuery.$or.push({ messageId: { $in: readUuids } });
+        }
+
+        if (readQuery.$or.length === 0) {
+          readQuery.messageId = { $in: [] };
+          delete readQuery.$or;
+        } else if (readQuery.$or.length === 1) {
+          const singleCond = readQuery.$or[0];
+          Object.assign(readQuery, singleCond);
+          delete readQuery.$or;
+        }
+
         // Bulk update: add read receipt only if not already present
         await Message.updateMany(
-          {
-            _id: { $in: messageIds.map((id: string) => new mongoose.Types.ObjectId(id)) },
-            roomId,
-            'readBy.userId': { $ne: userObjectId },
-          },
+          readQuery,
           {
             $push: { readBy: { userId: userObjectId, readAt: now } },
           }
@@ -395,12 +432,40 @@ export const setupSocketHandlers = (io: Server) => {
         const userObjectId = new mongoose.Types.ObjectId(userId);
         const now = new Date();
 
+        const delObjectIds: mongoose.Types.ObjectId[] = [];
+        const delUuids: string[] = [];
+        for (const id of messageIds) {
+          if (mongoose.Types.ObjectId.isValid(id)) {
+            delObjectIds.push(new mongoose.Types.ObjectId(id));
+          } else {
+            delUuids.push(id);
+          }
+        }
+
+        const delQuery: any = {
+          roomId,
+          'deliveredTo.userId': { $ne: userObjectId },
+          $or: []
+        };
+
+        if (delObjectIds.length > 0) {
+          delQuery.$or.push({ _id: { $in: delObjectIds } });
+        }
+        if (delUuids.length > 0) {
+          delQuery.$or.push({ messageId: { $in: delUuids } });
+        }
+
+        if (delQuery.$or.length === 0) {
+          delQuery.messageId = { $in: [] };
+          delete delQuery.$or;
+        } else if (delQuery.$or.length === 1) {
+          const singleCond = delQuery.$or[0];
+          Object.assign(delQuery, singleCond);
+          delete delQuery.$or;
+        }
+
         await Message.updateMany(
-          {
-            _id: { $in: messageIds.map((id: string) => new mongoose.Types.ObjectId(id)) },
-            roomId,
-            'deliveredTo.userId': { $ne: userObjectId },
-          },
+          delQuery,
           {
             $push: { deliveredTo: { userId: userObjectId, deliveredAt: now } },
           }
@@ -429,7 +494,9 @@ export const setupSocketHandlers = (io: Server) => {
           return;
         }
 
-        const msg = await Message.findById(messageId);
+        const msg = mongoose.Types.ObjectId.isValid(messageId)
+          ? await Message.findById(messageId)
+          : await Message.findOne({ messageId });
         if (!msg || msg.roomId !== roomId) {
           socket.emit('socket_error', { message: 'Message not found.' });
           return;
@@ -448,7 +515,7 @@ export const setupSocketHandlers = (io: Server) => {
         await msg.save();
 
         io.to(roomId).emit('reaction_updated', {
-          messageId:   msg._id.toString(),
+          messageId:   msg.messageId || msg._id.toString(),
           reactions:   msg.reactions,
           updatedBy:   userId,
         });
@@ -474,7 +541,9 @@ export const setupSocketHandlers = (io: Server) => {
           return;
         }
 
-        const msg = await Message.findById(messageId);
+        const msg = mongoose.Types.ObjectId.isValid(messageId)
+          ? await Message.findById(messageId)
+          : await Message.findOne({ messageId });
         if (!msg || msg.roomId !== roomId) {
           socket.emit('socket_error', { message: 'Message not found.' });
           return;
@@ -503,7 +572,7 @@ export const setupSocketHandlers = (io: Server) => {
         await msg.save();
 
         io.to(roomId).emit('message_edited', {
-          messageId:   msg._id.toString(),
+          messageId:   msg.messageId || msg._id.toString(),
           content:     msg.content,
           iv:          msg.iv,
           editedAt:    msg.editedAt,
@@ -531,7 +600,9 @@ export const setupSocketHandlers = (io: Server) => {
           return;
         }
 
-        const msg = await Message.findById(messageId);
+        const msg = mongoose.Types.ObjectId.isValid(messageId)
+          ? await Message.findById(messageId)
+          : await Message.findOne({ messageId });
         if (!msg || msg.roomId !== roomId) {
           socket.emit('socket_error', { message: 'Message not found.' });
           return;
@@ -584,9 +655,9 @@ export const setupSocketHandlers = (io: Server) => {
         await msg.save();
 
         if (deleteForEveryone) {
-          io.to(roomId).emit('message_deleted', { messageId: msg._id.toString(), roomId, deletedForEveryone: true });
+          io.to(roomId).emit('message_deleted', { messageId: msg.messageId || msg._id.toString(), roomId, deletedForEveryone: true });
         } else {
-          socket.emit('message_deleted', { messageId: msg._id.toString(), roomId, deletedForEveryone: false });
+          socket.emit('message_deleted', { messageId: msg.messageId || msg._id.toString(), roomId, deletedForEveryone: false });
         }
 
       } catch (err) {
