@@ -22,7 +22,11 @@ const getMediaUrl = (urlPath: string) => {
   return `${serverUrl}${urlPath}?token=${token}`;
 };
 
-const ChatWindow: React.FC = () => {
+interface ChatWindowProps {
+  onBack?: () => void;
+}
+
+const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
   const dispatch = useAppDispatch();
   const { currentRoom } = useAppSelector((state) => state.rooms);
   const { user } = useAppSelector((state) => state.auth);
@@ -546,7 +550,7 @@ const ChatWindow: React.FC = () => {
         <div className="chat-user-info">
           <button 
             className="back-btn mobile-only" 
-            onClick={() => dispatch(setCurrentRoom(null))}
+            onClick={() => onBack ? onBack() : dispatch(setCurrentRoom(null))}
             title="Back to rooms"
           >
             <ArrowLeft size={20} />

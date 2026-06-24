@@ -5,7 +5,7 @@ import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { socketService } from '../../services/socket';
 import { addMessage, updateMessage, deleteMessage, updateMessageReactions, updateMessageReceipts, setTyping } from './chatSlice';
 import api from '../../services/api';
-import { setRooms, updateRoomPreview, updatePresence } from '../rooms/roomsSlice';
+import { setRooms, updateRoomPreview, updatePresence, setCurrentRoom } from '../rooms/roomsSlice';
 import { useCrypto } from '../../hooks/useCrypto';
 import './Chat.css';
 
@@ -13,6 +13,7 @@ const ChatRoom: React.FC = () => {
   const dispatch = useAppDispatch();
   const { currentRoom } = useAppSelector((state) => state.rooms);
    
+  const isMobile = () => window.innerWidth <= 768;
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const { getRoomKey, decryptPayload } = useCrypto();
 
@@ -40,6 +41,10 @@ const ChatRoom: React.FC = () => {
   useEffect(() => {
     if (currentRoom) {
       socketService.joinRoom(currentRoom.roomId);
+      // On mobile, hide the sidebar when a room is selected
+      if (isMobile()) {
+        setIsSidebarOpen(false);
+      }
     }
     return () => {
       if (currentRoom) {
@@ -173,7 +178,10 @@ const ChatRoom: React.FC = () => {
       />
       <main className={`chat-main ${!isSidebarOpen ? 'full-width' : ''}`}>
         {currentRoom ? (
-          <ChatWindow />
+          <ChatWindow onBack={() => {
+            dispatch(setCurrentRoom(null));
+            setIsSidebarOpen(true);
+          }} />
         ) : (
           <div className="empty-chat">
             <div className="empty-chat-content fade-in">

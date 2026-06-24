@@ -686,3 +686,168 @@
   background: rgba(59, 130, 246, 0.1);
   color: #3b82f6;
 }
+
+/* ── Mobile-only utility ─────────────────────────────────────── */
+.back-btn {
+  display: none;
+}
+
+.mobile-only {
+  display: none;
+}
+
+/* ── Mobile Responsive Styles (≤ 768px) ─────────────────────── */
+@media (max-width: 768px) {
+  /* Show back button on mobile */
+  .back-btn,
+  .mobile-only {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-main);
+    border: none;
+    cursor: pointer;
+    transition: background 0.2s;
+    flex-shrink: 0;
+  }
+
+  .back-btn:hover,
+  .mobile-only:hover {
+    background: #F1F5F9;
+  }
+
+  /* Chat layout: stack sidebar over chat on mobile */
+  .chat-layout {
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* When a room is open, the main area fills the screen */
+  .chat-main {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    z-index: 1;
+  }
+
+  .chat-main.full-width {
+    width: 100%;
+  }
+
+  /* Chat header adjustments */
+  .chat-header {
+    padding: 0 16px;
+    height: 60px;
+  }
+
+  .chat-user-info {
+    gap: 10px;
+  }
+
+  .header-actions {
+    gap: 0;
+  }
+
+  .header-actions .action-btn {
+    width: 38px;
+    height: 38px;
+  }
+
+  /* Messages area */
+  .messages-area {
+    padding: 16px 12px;
+    gap: 6px;
+  }
+
+  /* Wider message bubbles on mobile */
+  .message-bubble {
+    max-width: 85%;
+    padding: 10px 14px;
+    font-size: 14px;
+  }
+
+  /* Input area */
+  .message-input-area {
+    padding: 12px 12px 20px;
+  }
+
+  .input-container {
+    height: 52px;
+    padding: 0 6px 0 16px;
+    border-radius: 26px;
+    gap: 8px;
+  }
+
+  .input-container input {
+    font-size: 14px;
+  }
+
+  .input-actions {
+    gap: 2px;
+  }
+
+  .action-btn {
+    width: 38px;
+    height: 38px;
+  }
+
+  .send-btn {
+    width: 38px;
+    height: 38px;
+  }
+
+  /* Empty chat on mobile */
+  .empty-chat h1 {
+    font-size: 18px;
+  }
+
+  .empty-chat-icon {
+    width: 80px;
+    height: 80px;
+    font-size: 32px;
+    border-radius: 20px;
+    margin-bottom: 16px;
+  }
+
+  /* Pinned messages panel on mobile */
+  .pinned-messages-list {
+    padding: 8px 12px;
+    max-height: 120px;
+  }
+
+  /* Message actions (edit/reply etc.) — show on tap, not hover on mobile */
+  .message-bubble:hover .message-actions-overlay {
+    display: none;
+  }
+}
+
+/* ── Small phones (≤ 390px) ─────────────────────────────────── */
+@media (max-width: 390px) {
+  .message-bubble {
+    max-width: 90%;
+    font-size: 13px;
+  }
+
+  .chat-header {
+    padding: 0 10px;
+  }
+
+  .chat-user-name {
+    font-size: 14px;
+  }
+
+  .messages-area {
+    padding: 12px 8px;
+  }
+
+  .message-input-area {
+    padding: 8px 8px 16px;
+  }
+}
