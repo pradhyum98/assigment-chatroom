@@ -12,10 +12,9 @@ const limitHandler = (limiterName: string) => {
   };
 };
 
-// Strict rate limit for authentication routes (login / register)
 export const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5,
+  max: 15,
   standardHeaders: true,
   legacyHeaders: false,
   handler: limitHandler('Authentication'),
