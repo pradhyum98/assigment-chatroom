@@ -166,7 +166,7 @@ export const changePassword = async (
       throw new AppError('New password must be at least 6 characters', 400);
     }
 
-    const user = await User.findById(req.user?.userId);
+    const user = await User.findById(req.user?._id);
     if (!user) throw new AppError('User not found', 404);
 
     user.password = newPassword;
