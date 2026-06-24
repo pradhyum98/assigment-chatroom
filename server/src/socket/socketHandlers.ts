@@ -74,7 +74,15 @@ const deleteMsgSchema = z.object({
 });
 
 // ─── WebRTC Signaling Schemas and State Maps ──────────────────────────────────
-const userSockets = new Map<string, Socket>();
+// Supports multiple sockets per user (multiple tabs / devices)
+const userSockets = new Map<string, Set<Socket>>();
+
+/** Get any live socket for a userId (for call routing etc.) */
+function getAnySocket(userId: string): Socket | undefined {
+  const sockets = userSockets.get(userId);
+  if (!sockets || sockets.size === 0) return undefined;
+  return sockets.values().next().value;
+}
 const activeCalls = new Map<string, { roomId: string; peerId: string; role: 'caller' | 'callee', callType: 'audio' | 'video', startedAt: Date, status: 'calling' | 'connected' }>();
 
 const callInitiateSchema = z.object({
@@ -154,7 +162,10 @@ export const setupSocketHandlers = (io: Server) => {
 
     const userId = user._id.toString();
     logger.debug(`Secure socket connected: ${socket.id} (${user.email})`);
-    userSockets.set(userId, socket);
+    if (!userSockets.has(userId)) {
+      userSockets.set(userId, new Set());
+    }
+    userSockets.get(userId)!.add(socket);
 
     // Mark user online and broadcast presence to all their rooms
     await User.updateOne({ _id: user._id }, { isOnline: true, lastSeen: new Date() });
@@ -621,7 +632,7 @@ export const setupSocketHandlers = (io: Server) => {
         activeCalls.set(userId, { roomId, peerId, role: 'caller', callType, startedAt: new Date(), status: 'calling' });
         activeCalls.set(peerId, { roomId, peerId: userId, role: 'callee', callType, startedAt: new Date(), status: 'calling' });
 
-        const peerSocket = userSockets.get(peerId);
+        const peerSocket = getAnySocket(peerId);
         if (peerSocket) {
           peerSocket.emit('call:incoming', {
             roomId,
@@ -655,7 +666,7 @@ export const setupSocketHandlers = (io: Server) => {
           return;
         }
 
-        const peerSocket = userSockets.get(call.peerId);
+        const peerSocket = getAnySocket(call.peerId);
         if (peerSocket) {
           peerSocket.emit('call:accepted', { roomId });
         }
@@ -681,7 +692,7 @@ export const setupSocketHandlers = (io: Server) => {
         const call = activeCalls.get(userId);
         if (!call || call.roomId !== roomId) return;
 
-        const peerSocket = userSockets.get(call.peerId);
+        const peerSocket = getAnySocket(call.peerId);
         if (peerSocket) {
           peerSocket.emit('call:rejected', { roomId });
         }
@@ -730,7 +741,7 @@ export const setupSocketHandlers = (io: Server) => {
         const targetIsMember = room.participants.some((p) => p.toString() === targetUserId);
         if (!targetIsMember) return;
 
-        const targetSocket = userSockets.get(targetUserId);
+        const targetSocket = getAnySocket(targetUserId);
         if (targetSocket) {
           targetSocket.emit('call:signal', {
             roomId,
@@ -752,7 +763,7 @@ export const setupSocketHandlers = (io: Server) => {
         const call = activeCalls.get(userId);
         if (!call || call.roomId !== roomId) return;
 
-        const peerSocket = userSockets.get(call.peerId);
+        const peerSocket = getAnySocket(call.peerId);
         if (peerSocket) {
           peerSocket.emit('call:ended', { roomId });
         }
@@ -807,11 +818,22 @@ export const setupSocketHandlers = (io: Server) => {
     // ── disconnect ────────────────────────────────────────────────────────────
     socket.on('disconnect', async () => {
       logger.debug(`Socket disconnected: ${socket.id} (${user.email})`);
-      userSockets.delete(userId);
+
+      // Remove just this socket from the user's set
+      const socketSet = userSockets.get(userId);
+      if (socketSet) {
+        socketSet.delete(socket);
+        if (socketSet.size === 0) {
+          userSockets.delete(userId);
+        }
+      }
+
+      // Only mark offline when ALL sockets for this user are gone
+      const isFullyOffline = !userSockets.has(userId) || userSockets.get(userId)!.size === 0;
 
       const activeCall = activeCalls.get(userId);
       if (activeCall) {
-        const peerSocket = userSockets.get(activeCall.peerId);
+        const peerSocket = getAnySocket(activeCall.peerId);
         if (peerSocket) {
           peerSocket.emit('call:ended', { roomId: activeCall.roomId });
         }
@@ -838,18 +860,20 @@ export const setupSocketHandlers = (io: Server) => {
         activeCalls.delete(activeCall.peerId);
       }
 
-      const now = new Date();
-      await User.updateOne({ _id: user._id }, { isOnline: false, lastSeen: now });
+      if (isFullyOffline) {
+        const now = new Date();
+        await User.updateOne({ _id: user._id }, { isOnline: false, lastSeen: now });
 
-      // Notify all rooms this user is in
-      const userRooms2 = await ChatRoom.find({ participants: user._id }, { roomId: 1 }).lean();
-      userRooms2.forEach(({ roomId }) => {
-        io.to(roomId).emit('presence_update', {
-          userId,
-          isOnline: false,
-          lastSeen: now,
+        // Notify all rooms this user is in
+        const userRooms2 = await ChatRoom.find({ participants: user._id }, { roomId: 1 }).lean();
+        userRooms2.forEach(({ roomId }) => {
+          io.to(roomId).emit('presence_update', {
+            userId,
+            isOnline: false,
+            lastSeen: now,
+          });
         });
-      });
+      }
     });
   });
 };

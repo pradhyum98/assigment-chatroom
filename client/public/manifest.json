@@ -1,17 +1,41 @@
 {
-  "name": "Secure Chat Room",
+  "name": "Secure Chat",
   "short_name": "Chat",
-  "description": "A secure, end-to-end encrypted private chat application.",
+  "description": "A secure, end-to-end encrypted real-time chat application.",
   "start_url": "/",
+  "id": "/",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait",
   "background_color": "#ffffff",
   "theme_color": "#4F46E5",
+  "categories": ["social", "communication"],
   "icons": [
     {
-      "src": "/favicon.svg",
-      "sizes": "192x192 512x512 any",
-      "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Open Chats",
+      "short_name": "Chats",
+      "url": "/",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
     }
   ]
 }
