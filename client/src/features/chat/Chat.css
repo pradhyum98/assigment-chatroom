@@ -66,6 +66,17 @@
   border-bottom: 1px solid #F1F5F9;
   justify-content: space-between;
   z-index: 5;
+  gap: 12px;
+  overflow: visible;
+}
+
+/* Always keep header actions in a horizontal row — no wrapping */
+.header-actions {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 .chat-user-info {
