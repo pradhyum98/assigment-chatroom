@@ -182,6 +182,9 @@ const MessageSchema = new Schema<MessageDoc>(
 
 // ─── Indexes ──────────────────────────────────────────────────────────────────
 
+// Compound index for deterministic incremental sinceId sync
+MessageSchema.index({ roomId: 1, _id: 1 });
+
 // Compound index for efficient room message retrieval with cursor-based pagination
 MessageSchema.index({ roomId: 1, timestamp: -1 });
 

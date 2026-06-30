@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { setMessages, clearTyping } from './chatSlice';
 import { clearUnreadCount, setCurrentRoom } from '../rooms/roomsSlice';
-import api, { uploadFile } from '../../services/api';
+import api from '../../services/api';
+import { UploadService } from '../../services/uploadService';
 import { socketService } from '../../services/socket';
 import { Send, Mic, Plus, CheckCheck, Check, Loader2, Edit2, Trash2, Smile, FileText, Download, Phone, Video, MessageSquare, X, Pin, ArrowLeft } from 'lucide-react';
 import { useCall } from '../calls/CallContext';
@@ -392,11 +393,15 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
         }
       }
 
-      socketService.editMessage({
-        messageId: editingMessageId,
+      syncManager.enqueueMessage({
         roomId: currentRoom.roomId,
+        senderId: user._id,
+        senderName: `${user.firstName} ${user.lastName}`,
         content: contentToSend,
-        iv: ivToSend
+        iv: ivToSend,
+        clientMsgId: editingMessageId,
+        type: 'text',
+        actionType: 'edit'
       });
       setEditingMessageId(null);
       setNewMessage('');
@@ -416,7 +421,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
         
         // Convert Blob to File to upload
         const encryptedFileToUpload = new File([encryptedBlob], selectedFile.name, { type: 'application/octet-stream' });
-        const uploadResult = await uploadFile(encryptedFileToUpload);
+        const uploadResult = await UploadService.uploadFileResumable(encryptedFileToUpload);
         mediaData = uploadResult.data;
         
         // Ensure type maps back since we uploaded as octet-stream
@@ -456,6 +461,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
         iv: ivToSend,
         clientMsgId: Math.random().toString(36).substring(7),
         replyTo: replyingTo ? (replyingTo.messageId || replyingTo._id) : undefined,
+        actionType: 'send' as const,
         ...(mediaData ? {
           type: mediaData.type,
           mediaUrl: mediaData.url,
@@ -493,7 +499,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
       const { encryptedBlob, fileKeyBase64, ivBase64 } = await CryptoService.encryptFile(file);
       
       const encryptedFileToUpload = new File([encryptedBlob], 'voice-message.webm', { type: 'application/octet-stream' });
-      const uploadResult = await uploadFile(encryptedFileToUpload);
+      const uploadResult = await UploadService.uploadFileResumable(encryptedFileToUpload);
       const mediaData = uploadResult.data;
 
       const messageData = {
@@ -509,6 +515,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
         mediaSize: mediaData.size,
         mediaKey: fileKeyBase64,
         mediaIv: ivBase64,
+        actionType: 'send' as const
       };
 
       syncManager.enqueueMessage(messageData);
@@ -531,10 +538,15 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
   };
 
   const handleDelete = (msg: any, forEveryone: boolean) => {
-    if (!currentRoom) return;
-    socketService.deleteMessage({
-      messageId: msg.messageId || msg._id,
+    if (!currentRoom || !user) return;
+    syncManager.enqueueMessage({
       roomId: currentRoom.roomId,
+      senderId: user._id,
+      senderName: `${user.firstName} ${user.lastName}`,
+      content: '',
+      clientMsgId: msg.messageId || msg._id,
+      type: 'text',
+      actionType: 'delete',
       deleteForEveryone: forEveryone
     });
   };
@@ -548,7 +560,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
       content: '',
       clientMsgId: msg.messageId || msg._id,
       type: 'reaction',
-      isReaction: true,
+      actionType: 'react',
       reactionEmoji: emoji
     });
   };

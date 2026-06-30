@@ -3,9 +3,16 @@ import { socketService } from './socket';
 import { store } from '../store';
 import { setRooms, setCurrentRoom } from '../features/rooms/roomsSlice';
 import { setFriends, setPendingRequests } from '../features/friends/friendsSlice';
-import { setMessages, addMessage, updateMessageReactions } from '../features/chat/chatSlice';
+import { 
+  setMessages, 
+  addMessage, 
+  updateMessage, 
+  deleteMessage, 
+  updateMessageReactions 
+} from '../features/chat/chatSlice';
 import { updateUser, logout } from '../features/auth/authSlice';
 import { CryptoService } from './cryptoService';
+import localDb from './indexedDb';
 
 interface QueuedMessage {
   roomId: string;
@@ -22,8 +29,9 @@ interface QueuedMessage {
   mediaSize?: number;
   mediaKey?: string;
   mediaIv?: string;
-  isReaction?: boolean;
+  actionType: 'send' | 'edit' | 'delete' | 'react';
   reactionEmoji?: string;
+  deleteForEveryone?: boolean;
   retryCount: number;
 }
 
@@ -36,17 +44,17 @@ class SyncManager {
     if (this.isInitialized) return;
     this.isInitialized = true;
 
-    // Listen to online events
+    // Listen to online/offline browser changes
     window.addEventListener('online', () => {
-      console.log('[SyncManager] Browser online, processing offline queue...');
+      console.log('[SyncManager] Browser online, triggering sync and queue processing...');
       this.syncOnReconnect();
     });
 
-    // Listen to socket reconnection events
+    // Listen to socket connection events
     const socket = socketService.connect();
     if (socket) {
       socket.on('connect', () => {
-        console.log('[SyncManager] Socket connected, processing offline queue...');
+        console.log('[SyncManager] Socket connected, triggering sync and queue processing...');
         this.syncOnReconnect();
       });
     }
@@ -109,12 +117,11 @@ class SyncManager {
       }
       
       this.init(); // Setup event listeners
-      this.processQueue(); // Process any stored queue
+      this.processQueue(); // Process any pending queued operations in IndexedDB
       
       console.log('[SyncManager] Bootstrap sequence completed successfully.');
     } catch (error) {
       console.error('[SyncManager] Bootstrap sequence failed:', error);
-      // If unauthorized, logout
       if ((error as any)?.response?.status === 401) {
         store.dispatch(logout());
       }
@@ -139,13 +146,12 @@ class SyncManager {
       // 3. Re-join all rooms
       socketService.connect();
 
-      // 4. Incremental message sync for active room
+      // 4. Incremental message sync for active room using sinceId
       const state = store.getState();
       const currentRoom = state.rooms.currentRoom;
       const messages = state.chat.messages;
 
       if (currentRoom && messages.length > 0) {
-        // Find last message with real DB ID (_id)
         const lastRealMsg = [...messages].reverse().find(m => m._id && !m.isOptimistic);
         if (lastRealMsg) {
           console.log('[SyncManager] Fetching incremental messages since ID:', lastRealMsg._id);
@@ -164,7 +170,6 @@ class SyncManager {
               })
             );
             
-            // Add messages to Redux
             decryptedNewMsgs.forEach(msg => {
               store.dispatch(addMessage(msg));
             });
@@ -181,32 +186,17 @@ class SyncManager {
     }
   }
 
-  enqueueMessage(msgPayload: Omit<QueuedMessage, 'retryCount'>) {
-    const queue = this.getStoredQueue();
+  async enqueueMessage(msgPayload: Omit<QueuedMessage, 'retryCount'>) {
     const queuedItem: QueuedMessage = { ...msgPayload, retryCount: 0 };
-    queue.push(queuedItem);
-    this.saveQueue(queue);
+    
+    // Save operation to IndexedDB
+    await localDb.put('offline_queue', queuedItem);
 
-    // Optimistic dispatch
-    const optimisticMsg = {
-      messageId: queuedItem.clientMsgId,
-      clientMsgId: queuedItem.clientMsgId,
-      senderId: queuedItem.senderId,
-      senderName: queuedItem.senderName,
-      roomId: queuedItem.roomId,
-      content: queuedItem.isReaction ? '' : queuedItem.content,
-      timestamp: new Date().toISOString(),
-      type: queuedItem.type,
-      mediaFilename: queuedItem.mediaFilename,
-      mediaSize: queuedItem.mediaSize,
-      replyTo: queuedItem.replyTo,
-      isOptimistic: true
-    } as any;
-
-    if (queuedItem.isReaction) {
-      // Toggle reaction optimistically
+    // Apply optimistic updates immediately to the UI
+    if (queuedItem.actionType === 'react') {
       const state = store.getState();
-      const targetMsg = state.chat.messages.find(m => m.messageId === queuedItem.clientMsgId || m._id === queuedItem.clientMsgId);
+      const msgId = queuedItem.clientMsgId;
+      const targetMsg = state.chat.messages.find(m => m.messageId === msgId || m._id === msgId);
       if (targetMsg) {
         const reactions = targetMsg.reactions || [];
         const index = reactions.findIndex((r: any) => r.userId === queuedItem.senderId && r.emoji === queuedItem.reactionEmoji);
@@ -216,13 +206,39 @@ class SyncManager {
         } else {
           updatedReactions.push({ emoji: queuedItem.reactionEmoji!, userId: queuedItem.senderId, createdAt: new Date().toISOString() });
         }
-        store.dispatch(updateMessageReactions({ messageId: queuedItem.clientMsgId, reactions: updatedReactions }));
+        store.dispatch(updateMessageReactions({ messageId: msgId, reactions: updatedReactions }));
       }
+    } else if (queuedItem.actionType === 'edit') {
+      store.dispatch(updateMessage({
+        messageId: queuedItem.clientMsgId,
+        content: queuedItem.content,
+        editedAt: new Date().toISOString()
+      }));
+    } else if (queuedItem.actionType === 'delete') {
+      store.dispatch(deleteMessage({
+        messageId: queuedItem.clientMsgId,
+        deletedForEveryone: queuedItem.deleteForEveryone || false
+      }));
     } else {
+      // Normal send
+      const optimisticMsg = {
+        messageId: queuedItem.clientMsgId,
+        clientMsgId: queuedItem.clientMsgId,
+        senderId: queuedItem.senderId,
+        senderName: queuedItem.senderName,
+        roomId: queuedItem.roomId,
+        content: queuedItem.content,
+        timestamp: new Date().toISOString(),
+        type: queuedItem.type,
+        mediaFilename: queuedItem.mediaFilename,
+        mediaSize: queuedItem.mediaSize,
+        replyTo: queuedItem.replyTo,
+        isOptimistic: true
+      } as any;
       store.dispatch(addMessage(optimisticMsg));
     }
 
-    // Process queue in background
+    // Process the queue asynchronously
     this.processQueue();
   }
 
@@ -231,22 +247,38 @@ class SyncManager {
     this.isProcessingQueue = true;
 
     try {
-      let queue = this.getStoredQueue();
+      let queue = await localDb.getAll('offline_queue');
+      
+      // Sort items to maintain FIFO order
+      // (Since clientMsgId is random, let's keep array order as read from IndexedDB)
       while (queue.length > 0) {
         if (!navigator.onLine || !socketService.connect()?.connected) {
-          console.log('[SyncManager] Connection lost, pausing queue processing.');
+          console.log('[SyncManager] Browser is offline or socket disconnected, pausing queue.');
           break;
         }
 
         const item = queue[0];
-        console.log('[SyncManager] Processing queue item:', item.clientMsgId);
+        console.log(`[SyncManager] Processing queue item: ${item.clientMsgId} (${item.actionType})`);
 
         try {
-          if (item.isReaction) {
+          if (item.actionType === 'react') {
             socketService.reactToMessage({
               messageId: item.clientMsgId,
               roomId: item.roomId,
               emoji: item.reactionEmoji!
+            });
+          } else if (item.actionType === 'edit') {
+            socketService.editMessage({
+              messageId: item.clientMsgId,
+              roomId: item.roomId,
+              content: item.content,
+              iv: item.iv
+            });
+          } else if (item.actionType === 'delete') {
+            socketService.deleteMessage({
+              messageId: item.clientMsgId,
+              roomId: item.roomId,
+              deleteForEveryone: item.deleteForEveryone || false
             });
           } else {
             socketService.sendMessage({
@@ -267,36 +299,29 @@ class SyncManager {
             });
           }
 
-          // Successfully sent. Remove from queue.
+          // Successfully processed. Remove from IndexedDB and memory queue.
+          await localDb.delete('offline_queue', item.clientMsgId);
           queue.shift();
-          this.saveQueue(queue);
         } catch (err) {
-          console.error('[SyncManager] Failed to send queue item:', err);
+          console.error('[SyncManager] Failed to process queue item:', err);
           item.retryCount++;
+          
           if (item.retryCount > 5) {
+            // Remove poison/failed operations after 5 attempts
+            await localDb.delete('offline_queue', item.clientMsgId);
             queue.shift();
           } else {
-            this.saveQueue(queue);
+            await localDb.put('offline_queue', item);
+            
+            // Wait with exponential backoff before the next check cycle
             const backoff = Math.min(10000, 1000 * Math.pow(2, item.retryCount));
-            await new Promise(r => setTimeout(r, backoff));
+            await new Promise(resolve => setTimeout(resolve, backoff));
           }
         }
       }
     } finally {
       this.isProcessingQueue = false;
     }
-  }
-
-  private getStoredQueue(): QueuedMessage[] {
-    try {
-      return JSON.parse(localStorage.getItem('offline_message_queue') || '[]');
-    } catch {
-      return [];
-    }
-  }
-
-  private saveQueue(queue: QueuedMessage[]) {
-    localStorage.setItem('offline_message_queue', JSON.stringify(queue));
   }
 
   private async getRoomKey(roomId: string, encryptedRoomKeys: any) {

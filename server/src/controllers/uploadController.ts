@@ -91,3 +91,156 @@ export const handleFileUpload = async (req: Request, res: Response, next: NextFu
     next(err);
   }
 };
+
+// ─── Chunked Resumable Upload Controllers ──────────────────────────────────────
+
+export const handleInitiateUpload = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { uploadId, filename, size, mimetype } = req.body;
+    if (!uploadId || !filename || size === undefined || !mimetype) {
+      throw new AppError('Missing required upload initiation parameters.', 400);
+    }
+
+    const chunksDir = path.join(UPLOAD_DIR, 'chunks', uploadId);
+    if (!fs.existsSync(chunksDir)) {
+      fs.mkdirSync(chunksDir, { recursive: true });
+    }
+
+    // Save upload metadata for later chunk assembly
+    fs.writeFileSync(
+      path.join(chunksDir, 'metadata.json'),
+      JSON.stringify({ filename, size, mimetype }),
+      'utf-8'
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Upload session initiated',
+      nextChunkIndex: 0,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const handleUploadStatus = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const uploadId = req.query['uploadId'] as string;
+    if (!uploadId) {
+      throw new AppError('uploadId is required.', 400);
+    }
+
+    const chunksDir = path.join(UPLOAD_DIR, 'chunks', uploadId);
+    if (fs.existsSync(chunksDir)) {
+      const files = fs.readdirSync(chunksDir);
+      // Determine what index files are present (integer names like 0, 1, 2...)
+      const indices = files
+        .map((f) => parseInt(f))
+        .filter((n) => !isNaN(n))
+        .sort((a, b) => a - b);
+      
+      // Determine the next missing chunk by checking sequential order
+      let nextChunkIndex = 0;
+      while (indices.includes(nextChunkIndex)) {
+        nextChunkIndex++;
+      }
+
+      res.status(200).json({
+        success: true,
+        nextChunkIndex,
+      });
+    } else {
+      res.status(200).json({
+        success: true,
+        nextChunkIndex: 0,
+      });
+    }
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const handleChunkUpload = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { uploadId, chunkIndex, totalChunks } = req.body;
+    if (!uploadId || chunkIndex === undefined || !totalChunks) {
+      throw new AppError('Missing required chunk upload body fields.', 400);
+    }
+
+    if (!req.file) {
+      throw new AppError('Chunk file is missing in multipart upload.', 400);
+    }
+
+    const chunksDir = path.join(UPLOAD_DIR, 'chunks', uploadId);
+    if (!fs.existsSync(chunksDir)) {
+      fs.mkdirSync(chunksDir, { recursive: true });
+    }
+
+    const tempPath = req.file.path;
+    const chunkDest = path.join(chunksDir, parseInt(chunkIndex).toString());
+
+    // Move file to chunks directory
+    fs.renameSync(tempPath, chunkDest);
+
+    const indexVal = parseInt(chunkIndex);
+    const totalVal = parseInt(totalChunks);
+
+    // Check if we received all chunks to trigger final file merging
+    const files = fs.readdirSync(chunksDir).filter((f) => f !== 'metadata.json');
+    if (files.length === totalVal) {
+      // Load file metadata
+      const metaPath = path.join(chunksDir, 'metadata.json');
+      if (!fs.existsSync(metaPath)) {
+        throw new AppError('Upload session metadata missing.', 400);
+      }
+      const { filename, size, mimetype } = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+
+      const ext = path.extname(filename).toLowerCase();
+      const safeFilename = `${uuidv4()}${ext}`;
+      const destPath = path.join(UPLOAD_DIR, safeFilename);
+
+      // Perform file chunk assembly (FIFO concatenation)
+      const writeStream = fs.createWriteStream(destPath);
+      for (let i = 0; i < totalVal; i++) {
+        const chunkPath = path.join(chunksDir, i.toString());
+        if (!fs.existsSync(chunkPath)) {
+          throw new AppError(`Missing chunk index ${i} during merge.`, 400);
+        }
+        const chunkBuffer = fs.readFileSync(chunkPath);
+        writeStream.write(chunkBuffer);
+        fs.unlinkSync(chunkPath); // Delete chunk file
+      }
+      writeStream.end();
+      
+      // Clean up metadata and temporary chunks folder
+      fs.unlinkSync(metaPath);
+      fs.rmdirSync(chunksDir);
+
+      const fileUrl = `/uploads/${safeFilename}`;
+      let type = 'file';
+      if (mimetype.startsWith('image/')) type = 'image';
+      else if (mimetype.startsWith('video/')) type = 'video';
+      else if (mimetype.startsWith('audio/')) type = 'audio';
+
+      res.status(200).json({
+        success: true,
+        message: 'File fully uploaded and assembled.',
+        data: {
+          url: fileUrl,
+          filename,
+          mimetype,
+          size,
+          type,
+        },
+      });
+    } else {
+      res.status(200).json({
+        success: true,
+        message: `Chunk ${indexVal} uploaded. Progress: ${files.length}/${totalVal}`,
+        chunkUploaded: indexVal,
+      });
+    }
+  } catch (err) {
+    next(err);
+  }
+};
