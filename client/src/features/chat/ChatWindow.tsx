@@ -5,7 +5,7 @@ import { clearUnreadCount, setCurrentRoom } from '../rooms/roomsSlice';
 import api from '../../services/api';
 import { UploadService } from '../../services/uploadService';
 import { socketService } from '../../services/socket';
-import { Send, Mic, Plus, CheckCheck, Check, Loader2, Edit2, Trash2, Smile, FileText, Download, Phone, Video, MessageSquare, X, Pin, ArrowLeft, Copy, Forward, Star, Image, File, VolumeX, Ban, Search, Users, User } from 'lucide-react';
+import { Send, Mic, Plus, CheckCheck, Check, Loader2, Edit2, Trash2, Smile, FileText, Download, Phone, Video, MessageSquare, X, Pin, ArrowLeft, Copy, Forward, Star, Image, File, VolumeX, Ban, Search, Users, User, AlertTriangle } from 'lucide-react';
 import { useCall } from '../calls/CallContext';
 import VoiceRecorder from '../media/VoiceRecorder';
 import ReactMarkdown from 'react-markdown';
@@ -61,6 +61,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
   const [forwardMsg, setForwardMsg] = useState<any | null>(null);
   const [starredTrigger, setStarredTrigger] = useState(0);
   const [showHeaderMenu, setShowHeaderMenu] = useState(false);
+  const [failedMedia, setFailedMedia] = useState<Record<string, boolean>>({});
 
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const scrollStateRef = useRef({ prevScrollHeight: 0, prevScrollTop: 0, adjustScroll: false });
@@ -1009,32 +1010,56 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
                       </div>
                     )}
                     {msg.type === 'image' && msg.mediaUrl && (
-                      <div className="media-wrapper" onClick={() => setActiveImageView(msg.decryptedMediaUrl || getMediaUrl(msg.mediaUrl))} style={{ cursor: 'pointer' }}>
-                        <img 
-                          src={msg.decryptedMediaUrl || getMediaUrl(msg.mediaUrl)} 
-                          alt={msg.mediaFilename} 
-                          className="message-image" 
-                          loading="lazy"
-                        />
-                      </div>
+                      failedMedia[msg.messageId || msg._id] ? (
+                        <div className="media-error-placeholder" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px', backgroundColor: 'rgba(239, 68, 68, 0.08)', borderRadius: '8px', color: '#ef4444', fontSize: '13px' }}>
+                          <AlertTriangle size={16} />
+                          <span>Photo unavailable</span>
+                        </div>
+                      ) : (
+                        <div className="media-wrapper" onClick={() => setActiveImageView(msg.decryptedMediaUrl || getMediaUrl(msg.mediaUrl))} style={{ cursor: 'pointer' }}>
+                          <img 
+                            src={msg.decryptedMediaUrl || getMediaUrl(msg.mediaUrl)} 
+                            alt="Photo" 
+                            className="message-image" 
+                            loading="lazy"
+                            onError={() => setFailedMedia(prev => ({ ...prev, [msg.messageId || msg._id]: true }))}
+                          />
+                        </div>
+                      )
                     )}
                     {msg.type === 'video' && msg.mediaUrl && (
-                      <div className="media-wrapper">
-                        <video 
-                          src={msg.decryptedMediaUrl || getMediaUrl(msg.mediaUrl)} 
-                          controls 
-                          className="message-video" 
-                        />
-                      </div>
+                      failedMedia[msg.messageId || msg._id] ? (
+                        <div className="media-error-placeholder" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px', backgroundColor: 'rgba(239, 68, 68, 0.08)', borderRadius: '8px', color: '#ef4444', fontSize: '13px' }}>
+                          <AlertTriangle size={16} />
+                          <span>Video unavailable</span>
+                        </div>
+                      ) : (
+                        <div className="media-wrapper">
+                          <video 
+                            src={msg.decryptedMediaUrl || getMediaUrl(msg.mediaUrl)} 
+                            controls 
+                            className="message-video" 
+                            onError={() => setFailedMedia(prev => ({ ...prev, [msg.messageId || msg._id]: true }))}
+                          />
+                        </div>
+                      )
                     )}
                     {msg.type === 'audio' && msg.mediaUrl && (
-                      <div className="media-wrapper">
-                        <audio 
-                          src={msg.decryptedMediaUrl || getMediaUrl(msg.mediaUrl)} 
-                          controls 
-                          className="message-audio" 
-                        />
-                      </div>
+                      failedMedia[msg.messageId || msg._id] ? (
+                        <div className="media-error-placeholder" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px', backgroundColor: 'rgba(239, 68, 68, 0.08)', borderRadius: '8px', color: '#ef4444', fontSize: '13px' }}>
+                          <AlertTriangle size={16} />
+                          <span>Audio unavailable</span>
+                        </div>
+                      ) : (
+                        <div className="media-wrapper">
+                          <audio 
+                            src={msg.decryptedMediaUrl || getMediaUrl(msg.mediaUrl)} 
+                            controls 
+                            className="message-audio" 
+                            onError={() => setFailedMedia(prev => ({ ...prev, [msg.messageId || msg._id]: true }))}
+                          />
+                        </div>
+                      )
                     )}
                     {msg.type === 'file' && msg.mediaUrl && (
                       <div className="message-file-attachment">
@@ -1047,7 +1072,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
                             rel="noopener noreferrer" 
                             className="file-link"
                           >
-                            {msg.mediaFilename}
+                            {msg.mediaFilename && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(msg.mediaFilename) ? "Document" : (msg.mediaFilename || "Document")}
                           </a>
                           <span className="file-size-tag">
                             ({(msg.mediaSize / 1024 / 1024).toFixed(2)} MB)

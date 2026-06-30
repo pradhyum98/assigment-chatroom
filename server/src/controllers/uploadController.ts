@@ -4,73 +4,138 @@ import path from 'path';
 import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 import { AppError } from '../middleware/errorHandler';
+import { v2 as cloudinary } from 'cloudinary';
 
-// ─── Multer Configuration ──────────────────────────────────────────────────────
+// ─── Cloudinary Configuration ──────────────────────────────────────────────────
+
+const useCloudinary = !!(
+  process.env.CLOUDINARY_CLOUD_NAME &&
+  process.env.CLOUDINARY_API_KEY &&
+  process.env.CLOUDINARY_API_SECRET
+);
+
+if (useCloudinary) {
+  cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+    secure: true,
+  });
+  console.log('[Upload] Cloudinary storage enabled.');
+} else {
+  console.warn('[Upload] CLOUDINARY env vars not set — falling back to local disk storage.');
+}
+
+// ─── Helper: upload a local file path to Cloudinary ────────────────────────────
+
+const uploadToCloudinary = (filePath: string, mimetype: string): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const resourceType = mimetype.startsWith('video/') ? 'video'
+      : mimetype.startsWith('image/') ? 'image'
+      : 'raw';
+
+    cloudinary.uploader.upload(filePath, {
+      resource_type: resourceType,
+      folder: 'chatroom_uploads',
+      // Store as raw since E2EE media is encrypted binary
+      ...(resourceType === 'raw' ? {} : { resource_type: 'raw' }),
+    }, (err, result) => {
+      if (err || !result) return reject(err || new Error('Cloudinary upload returned no result'));
+      resolve(result.secure_url);
+    });
+  });
+};
+
+// Always use raw resource type since files are E2EE encrypted blobs
+const uploadRawToCloudinary = (filePath: string, publicId: string): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    cloudinary.uploader.upload(filePath, {
+      resource_type: 'raw',
+      folder: 'chatroom_uploads',
+      public_id: publicId,
+      overwrite: true,
+    }, (err, result) => {
+      if (err || !result) return reject(err || new Error('Cloudinary upload returned no result'));
+      resolve(result.secure_url);
+    });
+  });
+};
+
+// ─── Local Fallback Paths ───────────────────────────────────────────────────────
 
 const UPLOAD_DIR = path.join(__dirname, '../../uploads');
 
-// Ensure upload directory exists
 if (!fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 
-// Allowed MIME types
+// ─── Multer (memory storage for single upload, disk storage for chunked) ────────
+
 const ALLOWED_MIME_TYPES = [
-  // Images
   'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-  // Videos
   'video/mp4', 'video/webm', 'video/quicktime',
-  // Audio
   'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/webm',
-  // Documents
   'application/pdf',
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'text/plain',
   // E2EE encrypted blobs
-  'application/octet-stream'
+  'application/octet-stream',
 ];
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, UPLOAD_DIR);
-  },
-  filename: (req, file, cb) => {
-    // Generate secure random filename to prevent path traversal & collisions
-    const ext = path.extname(file.originalname).toLowerCase();
-    const safeFilename = `${uuidv4()}${ext}`;
-    cb(null, safeFilename);
-  },
-});
 
 const fileFilter = (req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
   if (ALLOWED_MIME_TYPES.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new AppError('Invalid file type. Not allowed for security reasons.', 400));
+    cb(new AppError('Invalid file type.', 400));
   }
 };
 
-// 10 MB limit
-const MAX_FILE_SIZE = 10 * 1024 * 1024;
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+
+// Memory storage for single-shot uploads (Cloudinary path)
+const memoryStorage = multer.memoryStorage();
+
+// Disk storage for chunked uploads (chunks need to be on disk)
+const diskStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `${uuidv4()}${ext}`);
+  },
+});
 
 export const upload = multer({
-  storage,
+  storage: useCloudinary ? memoryStorage : diskStorage,
   limits: { fileSize: MAX_FILE_SIZE },
   fileFilter,
 });
 
-// ─── Upload Endpoint Handler ──────────────────────────────────────────────────
+// ─── Single-shot Upload Endpoint ───────────────────────────────────────────────
 
 export const handleFileUpload = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    if (!req.file) {
-      throw new AppError('No file uploaded.', 400);
+    if (!req.file) throw new AppError('No file uploaded.', 400);
+
+    let fileUrl: string;
+
+    if (useCloudinary && req.file.buffer) {
+      // Stream buffer to Cloudinary
+      const publicId = uuidv4();
+      fileUrl = await new Promise<string>((resolve, reject) => {
+        const stream = cloudinary.uploader.upload_stream(
+          { resource_type: 'raw', folder: 'chatroom_uploads', public_id: publicId },
+          (err, result) => {
+            if (err || !result) return reject(err || new Error('No result'));
+            resolve(result.secure_url);
+          }
+        );
+        stream.end(req.file!.buffer);
+      });
+    } else {
+      fileUrl = `/uploads/${req.file.filename}`;
     }
 
-    const fileUrl = `/uploads/${req.file.filename}`;
-    
-    // Determine generic message type based on mimetype
     let type = 'file';
     if (req.file.mimetype.startsWith('image/')) type = 'image';
     else if (req.file.mimetype.startsWith('video/')) type = 'video';
@@ -93,6 +158,13 @@ export const handleFileUpload = async (req: Request, res: Response, next: NextFu
 };
 
 // ─── Chunked Resumable Upload Controllers ──────────────────────────────────────
+// Chunks are always saved to local disk, assembled, then pushed to Cloudinary
+
+// For chunked uploads always use disk
+export const chunkUpload = multer({
+  storage: diskStorage,
+  limits: { fileSize: MAX_FILE_SIZE },
+});
 
 export const handleInitiateUpload = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
@@ -106,18 +178,13 @@ export const handleInitiateUpload = async (req: Request, res: Response, next: Ne
       fs.mkdirSync(chunksDir, { recursive: true });
     }
 
-    // Save upload metadata for later chunk assembly
     fs.writeFileSync(
       path.join(chunksDir, 'metadata.json'),
       JSON.stringify({ filename, size, mimetype }),
       'utf-8'
     );
 
-    res.status(200).json({
-      success: true,
-      message: 'Upload session initiated',
-      nextChunkIndex: 0,
-    });
+    res.status(200).json({ success: true, message: 'Upload session initiated', nextChunkIndex: 0 });
   } catch (err) {
     next(err);
   }
@@ -126,34 +193,17 @@ export const handleInitiateUpload = async (req: Request, res: Response, next: Ne
 export const handleUploadStatus = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const uploadId = req.query['uploadId'] as string;
-    if (!uploadId) {
-      throw new AppError('uploadId is required.', 400);
-    }
+    if (!uploadId) throw new AppError('uploadId is required.', 400);
 
     const chunksDir = path.join(UPLOAD_DIR, 'chunks', uploadId);
     if (fs.existsSync(chunksDir)) {
       const files = fs.readdirSync(chunksDir);
-      // Determine what index files are present (integer names like 0, 1, 2...)
-      const indices = files
-        .map((f) => parseInt(f))
-        .filter((n) => !isNaN(n))
-        .sort((a, b) => a - b);
-      
-      // Determine the next missing chunk by checking sequential order
+      const indices = files.map((f) => parseInt(f)).filter((n) => !isNaN(n)).sort((a, b) => a - b);
       let nextChunkIndex = 0;
-      while (indices.includes(nextChunkIndex)) {
-        nextChunkIndex++;
-      }
-
-      res.status(200).json({
-        success: true,
-        nextChunkIndex,
-      });
+      while (indices.includes(nextChunkIndex)) nextChunkIndex++;
+      res.status(200).json({ success: true, nextChunkIndex });
     } else {
-      res.status(200).json({
-        success: true,
-        nextChunkIndex: 0,
-      });
+      res.status(200).json({ success: true, nextChunkIndex: 0 });
     }
   } catch (err) {
     next(err);
@@ -166,57 +216,53 @@ export const handleChunkUpload = async (req: Request, res: Response, next: NextF
     if (!uploadId || chunkIndex === undefined || !totalChunks) {
       throw new AppError('Missing required chunk upload body fields.', 400);
     }
-
-    if (!req.file) {
-      throw new AppError('Chunk file is missing in multipart upload.', 400);
-    }
+    if (!req.file) throw new AppError('Chunk file is missing in multipart upload.', 400);
 
     const chunksDir = path.join(UPLOAD_DIR, 'chunks', uploadId);
-    if (!fs.existsSync(chunksDir)) {
-      fs.mkdirSync(chunksDir, { recursive: true });
-    }
+    if (!fs.existsSync(chunksDir)) fs.mkdirSync(chunksDir, { recursive: true });
 
     const tempPath = req.file.path;
     const chunkDest = path.join(chunksDir, parseInt(chunkIndex).toString());
-
-    // Move file to chunks directory
     fs.renameSync(tempPath, chunkDest);
 
-    const indexVal = parseInt(chunkIndex);
     const totalVal = parseInt(totalChunks);
-
-    // Check if we received all chunks to trigger final file merging
     const files = fs.readdirSync(chunksDir).filter((f) => f !== 'metadata.json');
+
     if (files.length === totalVal) {
-      // Load file metadata
       const metaPath = path.join(chunksDir, 'metadata.json');
-      if (!fs.existsSync(metaPath)) {
-        throw new AppError('Upload session metadata missing.', 400);
-      }
+      if (!fs.existsSync(metaPath)) throw new AppError('Upload session metadata missing.', 400);
+
       const { filename, size, mimetype } = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
 
       const ext = path.extname(filename).toLowerCase();
       const safeFilename = `${uuidv4()}${ext}`;
       const destPath = path.join(UPLOAD_DIR, safeFilename);
 
-      // Perform file chunk assembly (FIFO concatenation)
+      // Assemble chunks
       const writeStream = fs.createWriteStream(destPath);
       for (let i = 0; i < totalVal; i++) {
         const chunkPath = path.join(chunksDir, i.toString());
-        if (!fs.existsSync(chunkPath)) {
-          throw new AppError(`Missing chunk index ${i} during merge.`, 400);
-        }
-        const chunkBuffer = fs.readFileSync(chunkPath);
-        writeStream.write(chunkBuffer);
-        fs.unlinkSync(chunkPath); // Delete chunk file
+        if (!fs.existsSync(chunkPath)) throw new AppError(`Missing chunk ${i}.`, 400);
+        writeStream.write(fs.readFileSync(chunkPath));
+        fs.unlinkSync(chunkPath);
       }
       writeStream.end();
-      
-      // Clean up metadata and temporary chunks folder
+
+      // Cleanup temp chunks
       fs.unlinkSync(metaPath);
       fs.rmdirSync(chunksDir);
 
-      const fileUrl = `/uploads/${safeFilename}`;
+      let fileUrl: string;
+      if (useCloudinary) {
+        // Wait for write stream to finish before uploading
+        await new Promise<void>((resolve) => writeStream.on('finish', resolve));
+        fileUrl = await uploadRawToCloudinary(destPath, safeFilename.replace(/\.[^/.]+$/, ''));
+        // Remove local assembled file after Cloudinary upload
+        try { fs.unlinkSync(destPath); } catch { /* ignore */ }
+      } else {
+        fileUrl = `/uploads/${safeFilename}`;
+      }
+
       let type = 'file';
       if (mimetype.startsWith('image/')) type = 'image';
       else if (mimetype.startsWith('video/')) type = 'video';
@@ -225,19 +271,13 @@ export const handleChunkUpload = async (req: Request, res: Response, next: NextF
       res.status(200).json({
         success: true,
         message: 'File fully uploaded and assembled.',
-        data: {
-          url: fileUrl,
-          filename,
-          mimetype,
-          size,
-          type,
-        },
+        data: { url: fileUrl, filename, mimetype, size, type },
       });
     } else {
       res.status(200).json({
         success: true,
-        message: `Chunk ${indexVal} uploaded. Progress: ${files.length}/${totalVal}`,
-        chunkUploaded: indexVal,
+        message: `Chunk ${parseInt(chunkIndex)} uploaded. Progress: ${files.length}/${totalVal}`,
+        chunkUploaded: parseInt(chunkIndex),
       });
     }
   } catch (err) {

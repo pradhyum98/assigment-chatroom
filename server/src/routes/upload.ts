@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { upload, handleFileUpload, handleInitiateUpload, handleUploadStatus, handleChunkUpload } from '../controllers/uploadController';
+import { upload, chunkUpload, handleFileUpload, handleInitiateUpload, handleUploadStatus, handleChunkUpload } from '../controllers/uploadController';
 import { authenticate } from '../middleware/auth';
 
 const router = Router();
@@ -16,6 +16,6 @@ router.post('/initiate', handleInitiateUpload);
 router.get('/status', handleUploadStatus);
 
 // POST /api/upload/chunk
-router.post('/chunk', upload.single('chunk'), handleChunkUpload);
+router.post('/chunk', chunkUpload.single('chunk'), handleChunkUpload);
 
 export default router;
