@@ -5,7 +5,7 @@ import { clearUnreadCount, setCurrentRoom } from '../rooms/roomsSlice';
 import api from '../../services/api';
 import { UploadService } from '../../services/uploadService';
 import { socketService } from '../../services/socket';
-import { Send, Mic, Plus, CheckCheck, Check, Loader2, Edit2, Trash2, Smile, FileText, Download, Phone, Video, MessageSquare, X, Pin, ArrowLeft } from 'lucide-react';
+import { Send, Mic, Plus, CheckCheck, Check, Loader2, Edit2, Trash2, Smile, FileText, Download, Phone, Video, MessageSquare, X, Pin, ArrowLeft, Copy, Forward, Star, Image, File, VolumeX, Ban, Search } from 'lucide-react';
 import { useCall } from '../calls/CallContext';
 import VoiceRecorder from '../media/VoiceRecorder';
 import ReactMarkdown from 'react-markdown';
@@ -31,7 +31,7 @@ interface ChatWindowProps {
 
 const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
   const dispatch = useAppDispatch();
-  const { currentRoom } = useAppSelector((state) => state.rooms);
+  const { rooms, currentRoom } = useAppSelector((state) => state.rooms);
   const { user } = useAppSelector((state) => state.auth);
   const { messages, typingUsers } = useAppSelector((state) => state.chat);
   const { startCall } = useCall();
@@ -46,10 +46,62 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
   const { getRoomKey, encryptPayload, decryptPayload } = useCrypto();
 
   const [activeImageView, setActiveImageView] = useState<string | null>(null);
+  
+  // Custom states for production UX pass
+  const [contextMenuMsg, setContextMenuMsg] = useState<any | null>(null);
+  const [contextMenuPos, setContextMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const [deleteConfirmMsg, setDeleteConfirmMsg] = useState<any | null>(null);
+  const [showEmojiPickerMsg, setShowEmojiPickerMsg] = useState<any | null>(null);
+  const [emojiSearch, setEmojiSearch] = useState('');
+  const [showProfileDrawer, setShowProfileDrawer] = useState(false);
+  const [showAttachmentPopover, setShowAttachmentPopover] = useState(false);
+  const [chatSearchQuery, setChatSearchQuery] = useState('');
+  const [showChatSearch, setShowChatSearch] = useState(false);
+  const [chatWallpaper, setChatWallpaper] = useState('#f8fafc');
+  const [forwardMsg, setForwardMsg] = useState<any | null>(null);
+  const [starredTrigger, setStarredTrigger] = useState(0);
+
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const scrollStateRef = useRef({ prevScrollHeight: 0, prevScrollTop: 0, adjustScroll: false });
   const lastRoomIdRef = useRef<string | null>(null);
   const createdObjectUrlsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    const handleOutsideClick = () => {
+      setContextMenuMsg(null);
+      setContextMenuPos(null);
+    };
+    window.addEventListener('click', handleOutsideClick);
+    return () => window.removeEventListener('click', handleOutsideClick);
+  }, []);
+
+  useEffect(() => {
+    if (currentRoom) {
+      setChatWallpaper(localStorage.getItem(`wallpaper_${currentRoom.roomId}`) || '#f8fafc');
+    }
+  }, [currentRoom?.roomId]);
+
+  const getTargetRoomKey = async (roomId: string, encryptedRoomKeys: any) => {
+    try {
+      const savedKey = localStorage.getItem(`room_key_${roomId}`);
+      if (savedKey) {
+        return await CryptoService.importRoomKey(savedKey);
+      }
+      const privKeyBase64 = localStorage.getItem('e2e_private_key');
+      if (privKeyBase64 && encryptedRoomKeys) {
+        const myEncKey = encryptedRoomKeys[user?._id || ''];
+        if (myEncKey) {
+          const privKey = await CryptoService.importPrivateKey(privKeyBase64);
+          const roomKeyStr = await CryptoService.decryptRoomKey(myEncKey, privKey);
+          localStorage.setItem(`room_key_${roomId}`, roomKeyStr);
+          return await CryptoService.importRoomKey(roomKeyStr);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to decrypt room key for forwarding', e);
+    }
+    return null;
+  };
 
   // ── Object URL Cleanup to Prevent Memory Leaks ─────────────────────────────
   useEffect(() => {
@@ -355,6 +407,96 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
     }
   }, [messages, currentRoom, user]);
 
+  // Star message helpers
+  const toggleStarMessage = (msgId: string) => {
+    if (!currentRoom) return;
+    const key = `starred_${currentRoom.roomId}`;
+    const starred = JSON.parse(localStorage.getItem(key) || '[]');
+    const index = starred.indexOf(msgId);
+    if (index !== -1) {
+      starred.splice(index, 1);
+    } else {
+      starred.push(msgId);
+    }
+    localStorage.setItem(key, JSON.stringify(starred));
+    setStarredTrigger(prev => prev + 1);
+  };
+
+  const isMessageStarred = (msgId: string) => {
+    if (!currentRoom) return false;
+    const key = `starred_${currentRoom.roomId}`;
+    const starred = JSON.parse(localStorage.getItem(key) || '[]');
+    return starred.includes(msgId);
+  };
+
+  // Delete message for me locally
+  const handleDeleteForMe = (msg: any) => {
+    if (!currentRoom) return;
+    const key = `deleted_for_me_${currentRoom.roomId}`;
+    const deleted = JSON.parse(localStorage.getItem(key) || '[]');
+    const id = msg.messageId || msg._id;
+    if (!deleted.includes(id)) {
+      deleted.push(id);
+    }
+    localStorage.setItem(key, JSON.stringify(deleted));
+    setStarredTrigger(prev => prev + 1); // Reuse trigger to refresh views
+  };
+
+  const handleCopyMessage = (msg: any) => {
+    if (msg.content) {
+      navigator.clipboard.writeText(msg.content);
+      alert('Message copied to clipboard.');
+    }
+  };
+
+  const handleContextMenuTrigger = (e: React.MouseEvent, msg: any) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenuMsg(msg);
+    setContextMenuPos({ x: e.clientX, y: e.clientY });
+  };
+
+  const handleForwardMessage = async (targetRoom: any) => {
+    if (!forwardMsg || !user) return;
+    try {
+      let contentToSend = forwardMsg.content;
+      let ivToSend = forwardMsg.iv;
+
+      // If text message and targetRoom has E2EE keys, encrypt it for the new room
+      if (forwardMsg.type === 'text' && forwardMsg.content) {
+        const roomKey = await getTargetRoomKey(targetRoom.roomId, targetRoom.encryptedRoomKeys);
+        if (roomKey) {
+          const encResult = await encryptPayload(forwardMsg.content, roomKey);
+          contentToSend = encResult.ciphertext;
+          ivToSend = encResult.iv;
+        }
+      }
+
+      await syncManager.enqueueMessage({
+        roomId: targetRoom.roomId,
+        senderId: user._id,
+        senderName: `${user.firstName} ${user.lastName}`,
+        content: contentToSend,
+        iv: ivToSend,
+        clientMsgId: Math.random().toString(36).substring(7),
+        type: forwardMsg.type || 'text',
+        mediaUrl: forwardMsg.mediaUrl,
+        mediaFilename: forwardMsg.mediaFilename,
+        mediaMimeType: forwardMsg.mediaMimeType,
+        mediaSize: forwardMsg.mediaSize,
+        mediaKey: forwardMsg.mediaKey,
+        mediaIv: forwardMsg.mediaIv,
+        actionType: 'send'
+      });
+      alert(`Message forwarded to ${targetRoom.roomName || 'chat'}`);
+    } catch (e) {
+      console.error('Failed to forward message', e);
+      alert('Failed to forward message.');
+    } finally {
+      setForwardMsg(null);
+    }
+  };
+
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setNewMessage(e.target.value);
     
@@ -420,7 +562,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
         const { encryptedBlob, fileKeyBase64, ivBase64 } = await CryptoService.encryptFile(selectedFile);
         
         // Convert Blob to File to upload
-        const encryptedFileToUpload = new File([encryptedBlob], selectedFile.name, { type: 'application/octet-stream' });
+        const encryptedFileToUpload = new (window as any).File([encryptedBlob], selectedFile.name, { type: 'application/octet-stream' }) as File;
         const uploadResult = await UploadService.uploadFileResumable(encryptedFileToUpload);
         mediaData = uploadResult.data;
         
@@ -495,10 +637,10 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
 
     try {
       // Encrypt the file before uploading
-      const file = new File([audioBlob], 'voice-message.webm', { type: 'audio/webm' });
+      const file = new (window as any).File([audioBlob], 'voice-message.webm', { type: 'audio/webm' }) as File;
       const { encryptedBlob, fileKeyBase64, ivBase64 } = await CryptoService.encryptFile(file);
       
-      const encryptedFileToUpload = new File([encryptedBlob], 'voice-message.webm', { type: 'application/octet-stream' });
+      const encryptedFileToUpload = new (window as any).File([encryptedBlob], 'voice-message.webm', { type: 'application/octet-stream' }) as File;
       const uploadResult = await UploadService.uploadFileResumable(encryptedFileToUpload);
       const mediaData = uploadResult.data;
 
@@ -619,15 +761,35 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
     </div>
   );
 
-  const activeTypers = Object.values(typingUsers).filter(name => name !== `${user?.firstName} ${user?.lastName}`);
+  const roomTypers = typingUsers[currentRoom.roomId] || {};
+  const activeTypers = Object.values(roomTypers).filter(name => name !== `${user?.firstName} ${user?.lastName}`);
+
+  const clearedTime = currentRoom ? localStorage.getItem(`clear_chat_${currentRoom.roomId}`) : null;
+  const deletedForMeList = currentRoom ? JSON.parse(localStorage.getItem(`deleted_for_me_${currentRoom.roomId}`) || '[]') : [];
+  const _starsDummy = starredTrigger;
+  if (_starsDummy) {}
+
+  const filteredMessages = messages.filter((msg) => {
+    const id = msg.messageId || msg._id;
+    if (deletedForMeList.includes(id)) {
+      return false;
+    }
+    if (clearedTime && new Date(msg.timestamp) <= new Date(clearedTime)) {
+      return false;
+    }
+    if (showChatSearch && chatSearchQuery.trim()) {
+      return msg.content?.toLowerCase().includes(chatSearchQuery.toLowerCase());
+    }
+    return true;
+  });
 
   return (
     <div className="chat-window fade-in">
       <header className="chat-header">
-        <div className="chat-user-info">
+        <div className="chat-user-info" onClick={() => setShowProfileDrawer(!showProfileDrawer)} style={{ cursor: 'pointer' }}>
           <button 
             className="back-btn mobile-only" 
-            onClick={() => onBack ? onBack() : dispatch(setCurrentRoom(null))}
+            onClick={(e) => { e.stopPropagation(); onBack ? onBack() : dispatch(setCurrentRoom(null)); }}
             title="Back to rooms"
           >
             <ArrowLeft size={20} />
@@ -649,6 +811,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
           </div>
         </div>
         <div className="header-actions">
+          <button className={`action-btn ${showChatSearch ? 'active' : ''}`} onClick={() => setShowChatSearch(!showChatSearch)} title="Search Messages">
+            <Search size={20} />
+          </button>
           <button className={`action-btn ${showPinned ? 'active' : ''}`} onClick={() => setShowPinned(!showPinned)} title="Pinned Messages">
             <Pin size={20} />
           </button>
@@ -668,6 +833,21 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
           )}
         </div>
       </header>
+      
+      {showChatSearch && (
+        <div className="chat-search-bar" style={{ padding: '8px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', gap: '8px', backgroundColor: '#f8fafc' }}>
+          <input 
+            type="text" 
+            placeholder="Search messages..." 
+            value={chatSearchQuery}
+            onChange={(e) => setChatSearchQuery(e.target.value)}
+            style={{ flex: 1, padding: '6px 12px', border: '1px solid #cbd5e1', borderRadius: '8px', outline: 'none', fontSize: '13px' }}
+          />
+          <button onClick={() => { setShowChatSearch(false); setChatSearchQuery(''); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }}>
+            <X size={18} />
+          </button>
+        </div>
+      )}
 
       {showPinned && currentRoom.pinnedMessages && currentRoom.pinnedMessages.length > 0 && (
         <div className="pinned-messages-list">
@@ -720,7 +900,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
           <span>Today</span>
         </div>
         
-        {messages.map((msg: any, idx: number) => {
+        {filteredMessages.map((msg: any, idx: number) => {
           const isSentByMe = msg.senderId === user?._id;
           const isDeleted = msg.deletedForEveryone;
           
@@ -743,6 +923,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
             <div 
               key={msg.messageId || msg._id || idx} 
               className={`message-bubble ${isSentByMe ? 'sent' : 'received'} ${isDeleted ? 'deleted' : ''}`}
+              onContextMenu={(e) => handleContextMenuTrigger(e, msg)}
+              onDoubleClick={() => toggleStarMessage(msg.messageId || msg._id)}
             >
               <div className="message-content">
                 {isDeleted ? (
@@ -846,6 +1028,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
               )}
 
               <div className="message-info">
+                {isMessageStarred(msg.messageId || msg._id) && (
+                  <Star size={12} color="#f59e0b" fill="#f59e0b" style={{ marginRight: '4px', display: 'inline-block', verticalAlign: 'middle' }} />
+                )}
                 <span>{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                 {isSentByMe && (
                   isRead ? <CheckCheck size={14} color="#3b82f6" /> : (isDelivered ? <CheckCheck size={14} /> : <Check size={14} />)
@@ -916,9 +1101,27 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
                 style={{ display: 'none' }}
                 onChange={handleFileChange}
               />
-              <button type="button" className="action-btn" onClick={() => fileInputRef.current?.click()} disabled={isUploading}>
-                <Plus size={22} />
-              </button>
+              <div className="attachment-popover-container">
+                <button type="button" className="action-btn" onClick={() => setShowAttachmentPopover(!showAttachmentPopover)} disabled={isUploading}>
+                  <Plus size={22} />
+                </button>
+                {showAttachmentPopover && (
+                  <div className="attachment-popover" onClick={(e) => e.stopPropagation()}>
+                    <button type="button" className="attachment-option" onClick={() => { fileInputRef.current?.click(); setShowAttachmentPopover(false); }}>
+                      <div className="attachment-icon-wrapper" style={{ backgroundColor: '#25D366' }}><Image size={18} /></div>
+                      <span>Gallery</span>
+                    </button>
+                    <button type="button" className="attachment-option" onClick={() => { fileInputRef.current?.click(); setShowAttachmentPopover(false); }}>
+                      <div className="attachment-icon-wrapper" style={{ backgroundColor: '#007AFF' }}><File size={18} /></div>
+                      <span>Document</span>
+                    </button>
+                    <button type="button" className="attachment-option" onClick={() => { alert('Location sharing is simulated.'); setShowAttachmentPopover(false); }}>
+                      <div className="attachment-icon-wrapper" style={{ backgroundColor: '#FF9500' }}><Pin size={18} /></div>
+                      <span>Location</span>
+                    </button>
+                  </div>
+                )}
+              </div>
               <input 
                 type="text" 
                 placeholder="Write your message..." 
@@ -944,6 +1147,231 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
           initialIndex={messages.filter(m => m.type === 'image' && !m.deletedForEveryone).map(m => m.decryptedMediaUrl || getMediaUrl(m.mediaUrl || '')).indexOf(activeImageView || '')} 
           onClose={() => setActiveImageView(null)} 
         />
+      )}
+
+      {/* ── Context Menu Overlay ── */}
+      {contextMenuMsg && contextMenuPos && (
+        <div 
+          className="custom-context-menu" 
+          style={{ top: `${contextMenuPos.y}px`, left: `${contextMenuPos.x}px` }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Reaction Bar directly inside Context Menu */}
+          <div className="context-menu-reactions" style={{ padding: '6px 12px', borderBottom: '1px solid #e2e8f0', display: 'flex', gap: '6px' }}>
+            {['😀', '😂', '❤️', '👍', '😍', '😭', '🙏'].map(emoji => (
+              <button 
+                key={emoji} 
+                className="reaction-quick-emoji" 
+                onClick={() => { handleReact(contextMenuMsg, emoji); setContextMenuMsg(null); }}
+              >
+                {emoji}
+              </button>
+            ))}
+            <button 
+              className="reaction-plus-btn" 
+              onClick={() => { setShowEmojiPickerMsg(contextMenuMsg); setContextMenuMsg(null); }}
+            >
+              ➕
+            </button>
+          </div>
+          <button className="context-menu-item" onClick={() => { setReplyingTo(contextMenuMsg); setContextMenuMsg(null); }}>
+            <MessageSquare size={14} /> Reply
+          </button>
+          {contextMenuMsg.type === 'text' && (
+            <button className="context-menu-item" onClick={() => { handleCopyMessage(contextMenuMsg); setContextMenuMsg(null); }}>
+              <Copy size={14} /> Copy Text
+            </button>
+          )}
+          <button className="context-menu-item" onClick={() => { setForwardMsg(contextMenuMsg); setContextMenuMsg(null); }}>
+            <Forward size={14} /> Forward
+          </button>
+          <button className="context-menu-item" onClick={() => { toggleStarMessage(contextMenuMsg.messageId || contextMenuMsg._id); setContextMenuMsg(null); }}>
+            <Star size={14} /> {isMessageStarred(contextMenuMsg.messageId || contextMenuMsg._id) ? 'Unstar' : 'Star'}
+          </button>
+          <button className="context-menu-item" onClick={() => { handlePin(contextMenuMsg); setContextMenuMsg(null); }}>
+            <Pin size={14} /> Pin
+          </button>
+          {contextMenuMsg.senderId === user?._id && (
+            <button className="context-menu-item" onClick={() => { handleEditClick(contextMenuMsg); setContextMenuMsg(null); }}>
+              <Edit2 size={14} /> Edit
+            </button>
+          )}
+          <button className="context-menu-item danger-item" onClick={() => { setDeleteConfirmMsg(contextMenuMsg); setContextMenuMsg(null); }}>
+            <Trash2 size={14} /> Delete
+          </button>
+        </div>
+      )}
+
+      {/* ── Full Emoji Picker ── */}
+      {showEmojiPickerMsg && (
+        <div className="emoji-search-picker" style={{ position: 'fixed', bottom: '70px', right: '20px' }}>
+          <div className="emoji-picker-search">
+            <input 
+              type="text" 
+              placeholder="Search emoji..." 
+              value={emojiSearch}
+              onChange={(e) => setEmojiSearch(e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+            />
+          </div>
+          <div className="emoji-picker-list">
+            {['😀', '😂', '❤️', '👍', '😍', '😭', '🙏', '🔥', '👏', '🎉', '🌟', '👀', '💡', '🚀', '💯', '🤔', '💩', '😢', '🥳', '😎', '🤩', '😡', '👍', '👎', '✅', '❌', '✨', '🎈', '🎁', '🎂']
+              .filter(e => emojiSearch ? e.includes(emojiSearch) : true)
+              .map(emoji => (
+                <button 
+                  key={emoji} 
+                  className="emoji-picker-item" 
+                  onClick={() => { handleReact(showEmojiPickerMsg, emoji); setShowEmojiPickerMsg(null); setEmojiSearch(''); }}
+                >
+                  {emoji}
+                </button>
+              ))
+            }
+          </div>
+        </div>
+      )}
+
+      {/* ── Delete Confirmation Dialog ── */}
+      {deleteConfirmMsg && (
+        <div className="confirm-modal-overlay" onClick={() => setDeleteConfirmMsg(null)}>
+          <div className="confirm-modal-content" onClick={(e) => e.stopPropagation()}>
+            <h3>Delete Message?</h3>
+            <p>Would you like to delete this message for yourself, or delete it for everyone?</p>
+            <div className="confirm-modal-actions">
+              <button 
+                className="confirm-action-btn primary" 
+                onClick={() => { handleDelete(deleteConfirmMsg, false); handleDeleteForMe(deleteConfirmMsg); setDeleteConfirmMsg(null); }}
+              >
+                Delete for Me
+              </button>
+              {deleteConfirmMsg.senderId === user?._id && (
+                <button 
+                  className="confirm-action-btn primary" 
+                  onClick={() => { handleDelete(deleteConfirmMsg, true); setDeleteConfirmMsg(null); }}
+                >
+                  Delete for Everyone
+                </button>
+              )}
+              <button className="confirm-action-btn secondary" onClick={() => setDeleteConfirmMsg(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Forward Message Dialogue ── */}
+      {forwardMsg && (
+        <div className="confirm-modal-overlay" onClick={() => setForwardMsg(null)}>
+          <div className="confirm-modal-content" onClick={(e) => e.stopPropagation()}>
+            <h3>Forward Message</h3>
+            <p>Select a chat room to forward this message to:</p>
+            <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
+              {rooms.map((room: any) => (
+                <button 
+                  key={room.roomId} 
+                  onClick={() => handleForwardMessage(room)}
+                  style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #e2e8f0', background: 'none', textAlign: 'left', cursor: 'pointer', fontSize: '13px' }}
+                >
+                  {room.roomName || 'Direct Message'}
+                </button>
+              ))}
+            </div>
+            <button className="confirm-action-btn secondary" onClick={() => setForwardMsg(null)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Profile Drawer (WhatsApp-style Right Column) ── */}
+      {showProfileDrawer && (
+        <div className="profile-drawer">
+          <div className="drawer-header">
+            <h2>Chat Info</h2>
+            <button className="drawer-close-btn" onClick={() => setShowProfileDrawer(false)}>
+              <X size={20} />
+            </button>
+          </div>
+          <div className="drawer-content">
+            {/* Wallpaper picker */}
+            <div className="drawer-section">
+              <div className="drawer-section-title">Chat Wallpaper</div>
+              <div className="wallpaper-grid">
+                {['#f8fafc', '#efeae2', '#e5ddd5', '#d1e7dd', '#f8d7da', '#cff4fc', '#ffe69c'].map(color => (
+                  <div 
+                    key={color} 
+                    className={`wallpaper-color-box ${chatWallpaper === color ? 'active' : ''}`}
+                    style={{ backgroundColor: color }}
+                    onClick={() => { setChatWallpaper(color); localStorage.setItem(`wallpaper_${currentRoom.roomId}`, color); }}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Starred Messages */}
+            <div className="drawer-section">
+              <div className="drawer-section-title">Starred Messages</div>
+              <div style={{ maxHeight: '150px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {messages.filter(m => isMessageStarred((m.messageId || m._id) || '')).length > 0 ? (
+                  messages.filter(m => isMessageStarred((m.messageId || m._id) || '')).map(m => (
+                    <div key={m.messageId} style={{ padding: '8px', backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '12px' }}>
+                      <div style={{ fontWeight: 'bold', marginBottom: '2px' }}>{m.senderName}</div>
+                      <div>{m.content || '[Media]'}</div>
+                    </div>
+                  ))
+                ) : (
+                  <span style={{ fontSize: '12px', color: '#94a3b8', fontStyle: 'italic' }}>No starred messages yet.</span>
+                )}
+              </div>
+            </div>
+
+            {/* Action buttons */}
+            <div className="drawer-section">
+              <div className="drawer-section-title">Actions</div>
+              <div className="drawer-options">
+                <button 
+                  className="drawer-option-btn" 
+                  onClick={() => {
+                    const muted = localStorage.getItem(`mute_${currentRoom.roomId}`) === 'true';
+                    localStorage.setItem(`mute_${currentRoom.roomId}`, muted ? 'false' : 'true');
+                    setStarredTrigger(prev => prev + 1);
+                  }}
+                >
+                  <VolumeX size={16} /> 
+                  {localStorage.getItem(`mute_${currentRoom.roomId}`) === 'true' ? 'Unmute Notifications' : 'Mute Notifications'}
+                </button>
+                <button 
+                  className="drawer-option-btn danger-btn" 
+                  onClick={() => {
+                    if (confirm('Clear all local messages in this conversation?')) {
+                      localStorage.setItem(`clear_chat_${currentRoom.roomId}`, new Date().toISOString());
+                      setStarredTrigger(prev => prev + 1);
+                      setShowProfileDrawer(false);
+                    }
+                  }}
+                >
+                  <Trash2 size={16} /> Clear Chat
+                </button>
+                <button 
+                  className="drawer-option-btn danger-btn" 
+                  onClick={async () => {
+                    if (confirm('Delete this chat room?')) {
+                      const hiddenRooms = JSON.parse(localStorage.getItem('hidden_rooms') || '[]');
+                      if (!hiddenRooms.includes(currentRoom.roomId)) {
+                        hiddenRooms.push(currentRoom.roomId);
+                      }
+                      localStorage.setItem('hidden_rooms', JSON.stringify(hiddenRooms));
+                      dispatch(setCurrentRoom(null));
+                    }
+                  }}
+                >
+                  <Ban size={16} /> Delete Chat
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

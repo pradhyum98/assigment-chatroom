@@ -59,7 +59,10 @@ export const createOrGetDM = async (
     });
 
     if (room) {
-      const populated = await room.populate('participants', 'firstName lastName email isOnline lastSeen publicKey');
+      const populated = await room.populate([
+        { path: 'participants', select: 'firstName lastName email isOnline lastSeen publicKey' },
+        { path: 'lastMessage' }
+      ]);
       res.status(200).json({
         success: true,
         message: 'DM room retrieved.',
@@ -94,7 +97,10 @@ export const createOrGetDM = async (
           participants: { $all: participantIds, $size: 2 },
         });
         if (room) {
-          const populated = await room.populate('participants', 'firstName lastName email isOnline lastSeen publicKey');
+          const populated = await room.populate([
+            { path: 'participants', select: 'firstName lastName email isOnline lastSeen publicKey' },
+            { path: 'lastMessage' }
+          ]);
           res.status(200).json({
             success: true,
             message: 'DM room retrieved.',
@@ -106,7 +112,10 @@ export const createOrGetDM = async (
       throw err;
     }
 
-    const populated = await room.populate('participants', 'firstName lastName email isOnline lastSeen publicKey');
+    const populated = await room.populate([
+      { path: 'participants', select: 'firstName lastName email isOnline lastSeen publicKey' },
+      { path: 'lastMessage' }
+    ]);
 
     res.status(201).json({
       success: true,
@@ -170,7 +179,8 @@ export const createRoom = async (
 
     const populated = await room.populate([
       { path: 'createdBy', select: 'firstName lastName email' },
-      { path: 'participants', select: 'firstName lastName email isOnline lastSeen publicKey' }
+      { path: 'participants', select: 'firstName lastName email isOnline lastSeen publicKey' },
+      { path: 'lastMessage' }
     ]);
 
     auditLog.dmRoomCreated(room.roomId, user.email, validParticipants);
@@ -202,6 +212,7 @@ export const getRooms = async (
     })
       .populate('createdBy', 'firstName lastName email')
       .populate('participants', 'firstName lastName email isOnline lastSeen publicKey')
+      .populate('lastMessage')
       .sort({ updatedAt: -1 })
       .lean();
 

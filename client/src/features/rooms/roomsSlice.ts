@@ -18,6 +18,7 @@ export interface Room {
   unreadCounts?: Record<string, number>;
   unreadCount?: number; // legacy/derived
   pinnedMessages?: any[];
+  lastMessage?: any;
 }
 
 interface RoomsState {

@@ -78,20 +78,32 @@ self.addEventListener('push', function (event) {
   if (event.data) {
     try {
       const payload = event.data.json();
+      let displayBody = payload.body || 'New message received';
+      
+      // If the body is a single long ciphertext string, mask it
+      if (displayBody.length > 20 && !displayBody.includes(' ')) {
+        displayBody = '🔒 New Encrypted Message';
+      }
+      
       const options = {
-        body: payload.body,
+        body: displayBody,
         icon: '/icon-192.png',
         badge: '/icon-192.png',
         data: { url: payload.url || '/' },
         vibrate: [100, 50, 100],
       };
       event.waitUntil(
-        self.registration.showNotification(payload.title, options)
+        self.registration.showNotification(payload.title || 'New Message', options)
       );
     } catch (e) {
+      let fallbackBody = 'New message received';
+      const text = event.data.text();
+      if (text && text.length > 20 && !text.includes(' ')) {
+        fallbackBody = '🔒 New Encrypted Message';
+      }
       event.waitUntil(
         self.registration.showNotification('New Message', {
-          body: event.data.text(),
+          body: fallbackBody,
           icon: '/icon-192.png',
         })
       );

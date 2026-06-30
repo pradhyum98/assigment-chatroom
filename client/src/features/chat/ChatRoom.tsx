@@ -197,9 +197,7 @@ const ChatRoom: React.FC = () => {
     };
 
     const handleUserTyping = (data: any) => {
-      if (currentRoom && data.roomId === currentRoom.roomId) {
-        dispatch(setTyping(data));
-      }
+      dispatch(setTyping(data));
     };
 
     const handlePresenceUpdate = (data: any) => {

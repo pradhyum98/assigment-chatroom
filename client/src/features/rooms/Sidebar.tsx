@@ -19,6 +19,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
   const dispatch = useAppDispatch();
   const { rooms, currentRoom } = useAppSelector((state) => state.rooms);
   const { user } = useAppSelector((state) => state.auth);
+  const { typingUsers } = useAppSelector((state) => state.chat);
   const [searchQuery, setSearchQuery] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showFriendsModal, setShowFriendsModal] = useState(false);
@@ -58,6 +59,106 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
     return name.charAt(0).toUpperCase();
   };
 
+  const [decryptedPreviews, setDecryptedPreviews] = useState<Record<string, string>>({});
+
+  const getRoomKey = async (roomId: string, encryptedRoomKeys: any) => {
+    try {
+      const savedKey = localStorage.getItem(`room_key_${roomId}`);
+      if (savedKey) {
+        return await CryptoService.importRoomKey(savedKey);
+      }
+      const privKeyBase64 = localStorage.getItem('e2e_private_key');
+      if (privKeyBase64 && encryptedRoomKeys) {
+        const myEncKey = encryptedRoomKeys[user?._id || ''];
+        if (myEncKey) {
+          const privKey = await CryptoService.importPrivateKey(privKeyBase64);
+          const roomKeyStr = await CryptoService.decryptRoomKey(myEncKey, privKey);
+          localStorage.setItem(`room_key_${roomId}`, roomKeyStr);
+          return await CryptoService.importRoomKey(roomKeyStr);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to decrypt room key in sidebar', e);
+    }
+    return null;
+  };
+
+  useEffect(() => {
+    const decryptAllPreviews = async () => {
+      const newPreviews = { ...decryptedPreviews };
+      let changed = false;
+
+      for (const room of rooms) {
+        // Typing indicator check
+        const typers = typingUsers[room.roomId] || {};
+        const activeTypers = Object.values(typers).filter(name => name !== `${user?.firstName} ${user?.lastName}`);
+        if (activeTypers.length > 0) {
+          const text = `${activeTypers[0]} is typing...`;
+          if (newPreviews[room.roomId] !== text) {
+            newPreviews[room.roomId] = text;
+            changed = true;
+          }
+          continue;
+        }
+
+        if (newPreviews[room.roomId] && newPreviews[room.roomId].endsWith('is typing...')) {
+          delete newPreviews[room.roomId];
+          changed = true;
+        }
+
+        if (newPreviews[room.roomId]) continue;
+
+        changed = true;
+        if (room.lastMessage) {
+          const msg = room.lastMessage;
+          if (msg.type && msg.type !== 'text') {
+            let label = '📄 Document';
+            if (msg.type === 'image') label = '📷 Photo';
+            else if (msg.type === 'video') label = '🎥 Video';
+            else if (msg.type === 'audio' || msg.type === 'voice') label = '🎤 Voice Message';
+            newPreviews[room.roomId] = label;
+            continue;
+          }
+
+          if (msg.content) {
+            if (msg.iv) {
+              const roomKey = await getRoomKey(room.roomId, room.encryptedRoomKeys);
+              if (roomKey) {
+                try {
+                  const decrypted = await CryptoService.decryptMessage(msg.content, msg.iv, roomKey);
+                  newPreviews[room.roomId] = decrypted;
+                } catch {
+                  newPreviews[room.roomId] = '🔒 Encrypted Message';
+                }
+              } else {
+                newPreviews[room.roomId] = '🔒 Encrypted Message';
+              }
+            } else {
+              newPreviews[room.roomId] = msg.content;
+            }
+          }
+        } else {
+          let fallback = room.previewText || 'Click to start chatting';
+          if (fallback.includes('[Attachment:')) {
+            if (fallback.includes('image')) fallback = '📷 Photo';
+            else if (fallback.includes('video')) fallback = '🎥 Video';
+            else if (fallback.includes('audio')) fallback = '🎤 Voice Message';
+            else fallback = '📄 Document';
+          } else if (fallback !== 'Click to start chatting' && fallback !== 'No messages yet.') {
+            fallback = '🔒 Encrypted Message';
+          }
+          newPreviews[room.roomId] = fallback;
+        }
+      }
+
+      if (changed) {
+        setDecryptedPreviews(newPreviews);
+      }
+    };
+
+    decryptAllPreviews();
+  }, [rooms, typingUsers]);
+
   const isRoomOnline = (room: Room) => {
     if (room.isOnline !== undefined) return room.isOnline;
     if (room.isDM) {
@@ -69,13 +170,16 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
     return false;
   };
 
-  const filteredDMs = rooms.filter(
+  const hiddenRooms = JSON.parse(localStorage.getItem('hidden_rooms') || '[]');
+  const visibleRooms = rooms.filter(room => !hiddenRooms.includes(room.roomId));
+
+  const filteredDMs = visibleRooms.filter(
     (room) =>
       room.isDM &&
       getRoomDisplayName(room).toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const filteredGroups = rooms.filter(
+  const filteredGroups = visibleRooms.filter(
     (room) =>
       !room.isDM &&
       getRoomDisplayName(room).toLowerCase().includes(searchQuery.toLowerCase())
@@ -200,9 +304,11 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
                     </div>
                     <div className="room-bottom">
                       <span className="room-preview">
-                        {(room.previewText?.length ?? 0) > 35 
-                          ? room.previewText!.substring(0, 35) + '...' 
-                          : room.previewText || 'Click to start chatting'}
+                        {decryptedPreviews[room.roomId] 
+                          ? (decryptedPreviews[room.roomId].length > 35 
+                              ? decryptedPreviews[room.roomId].substring(0, 35) + '...' 
+                              : decryptedPreviews[room.roomId])
+                          : 'Click to start chatting'}
                       </span>
                       {unreadCount > 0 && (
                         <span className="unread-badge">{unreadCount}</span>
@@ -251,9 +357,11 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
                     </div>
                     <div className="room-bottom">
                       <span className="room-preview">
-                        {(room.previewText?.length ?? 0) > 35 
-                          ? room.previewText!.substring(0, 35) + '...' 
-                          : room.previewText || 'No messages yet.'}
+                        {decryptedPreviews[room.roomId] 
+                          ? (decryptedPreviews[room.roomId].length > 35 
+                              ? decryptedPreviews[room.roomId].substring(0, 35) + '...' 
+                              : decryptedPreviews[room.roomId])
+                          : 'No messages yet.'}
                       </span>
                       {unreadCount > 0 && (
                         <span className="unread-badge">{unreadCount}</span>

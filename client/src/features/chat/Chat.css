@@ -1032,4 +1032,489 @@
   }
 }
 
+/* ── Floating Context Menu & Quick Reactions Bar ────────────────────── */
+.floating-reaction-bar {
+  position: absolute;
+  z-index: 999;
+  background-color: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 24px;
+  padding: 6px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  animation: scale-up 0.15s ease-out;
+}
+
+.reaction-quick-emoji {
+  font-size: 20px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: transform 0.2s ease;
+  padding: 2px;
+}
+
+.reaction-quick-emoji:hover {
+  transform: scale(1.3);
+}
+
+.reaction-plus-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background-color: #f1f5f9;
+  border: none;
+  cursor: pointer;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.reaction-plus-btn:hover {
+  background-color: #e2e8f0;
+}
+
+.custom-context-menu {
+  position: absolute;
+  z-index: 998;
+  background-color: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  width: 180px;
+  padding: 6px 0;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  animation: scale-up 0.15s ease-out;
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 16px;
+  background: none;
+  border: none;
+  text-align: left;
+  font-size: 14px;
+  color: #334155;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.context-menu-item:hover {
+  background-color: #f8fafc;
+}
+
+.context-menu-item.danger-item {
+  color: #ef4444;
+}
+
+.context-menu-item.danger-item:hover {
+  background-color: #fef2f2;
+}
+
+@keyframes scale-up {
+  from {
+    transform: scale(0.95);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* ── Profile Drawer (WhatsApp/Telegram Style Panel) ────────────────── */
+.profile-drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 320px;
+  background-color: #ffffff;
+  border-left: 1px solid #e2e8f0;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  box-shadow: -4px 0 20px rgba(0, 0, 0, 0.05);
+  animation: slide-in-right 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.drawer-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.drawer-header h2 {
+  font-size: 16px;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.drawer-close-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #64748b;
+}
+
+.drawer-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.drawer-section-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 12px;
+}
+
+.drawer-media-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.drawer-media-item {
+  aspect-ratio: 1;
+  border-radius: 8px;
+  background-color: #f1f5f9;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.drawer-media-item img,
+.drawer-media-item video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.drawer-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.drawer-file-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  border-radius: 8px;
+  background-color: #f8fafc;
+  font-size: 13px;
+  text-decoration: none;
+  color: #334155;
+  border: 1px solid #e2e8f0;
+}
+
+.drawer-file-item:hover {
+  background-color: #f1f5f9;
+}
+
+.drawer-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.drawer-option-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  background: none;
+  text-align: left;
+  font-size: 14px;
+  color: #334155;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.drawer-option-btn:hover {
+  background-color: #f8fafc;
+}
+
+.drawer-option-btn.danger-btn {
+  color: #ef4444;
+  border-color: #fee2e2;
+}
+
+.drawer-option-btn.danger-btn:hover {
+  background-color: #fef2f2;
+}
+
+/* ── Wallpaper Picker styling ───────────────────────────────────────── */
+.wallpaper-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.wallpaper-color-box {
+  aspect-ratio: 1;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: border-color 0.2s;
+}
+
+.wallpaper-color-box:hover {
+  border-color: #cbd5e1;
+}
+
+.wallpaper-color-box.active {
+  border-color: #6366f1;
+}
+
+/* ── Modern Confirm Dialog Modals ────────────────────────────────────── */
+.confirm-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10000;
+  background-color: rgba(15, 23, 42, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(4px);
+}
+
+.confirm-modal-content {
+  background-color: #ffffff;
+  border-radius: 16px;
+  width: 320px;
+  padding: 24px;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  text-align: center;
+}
+
+.confirm-modal-content h3 {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 12px;
+  color: #1e293b;
+}
+
+.confirm-modal-content p {
+  font-size: 14px;
+  color: #64748b;
+  margin-bottom: 20px;
+  line-height: 1.5;
+}
+
+.confirm-modal-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.confirm-action-btn {
+  width: 100%;
+  padding: 12px;
+  border-radius: 10px;
+  border: none;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.confirm-action-btn.primary {
+  background-color: #ef4444;
+  color: #ffffff;
+}
+
+.confirm-action-btn.primary:hover {
+  background-color: #dc2626;
+}
+
+.confirm-action-btn.secondary {
+  background-color: #f1f5f9;
+  color: #334155;
+}
+
+.confirm-action-btn.secondary:hover {
+  background-color: #e2e8f0;
+}
+
+/* ── Attachment Sheet/Popover ────────────────────────────────────────── */
+.attachment-popover-container {
+  position: relative;
+  display: inline-block;
+}
+
+.attachment-popover {
+  position: absolute;
+  bottom: 50px;
+  left: 0;
+  z-index: 100;
+  background-color: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 12px;
+  width: 220px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  animation: scale-up 0.15s ease-out;
+}
+
+.attachment-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  color: #475569;
+}
+
+.attachment-icon-wrapper {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+}
+
+/* ── Message Bubble Redesign & Spacing ────────────────────────────── */
+.message-bubble {
+  max-width: 65% !important;
+  border-radius: 16px !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
+  margin: 4px 0 !important;
+  padding: 8px 12px 20px 12px !important;
+}
+
+.message-bubble.sent {
+  border-bottom-right-radius: 4px !important;
+  background-color: #d9fdd3 !important; /* WhatsApp Green */
+  color: #111b21 !important;
+}
+
+.message-bubble.received {
+  border-bottom-left-radius: 4px !important;
+  background-color: #ffffff !important;
+  color: #111b21 !important;
+}
+
+.message-info {
+  bottom: 4px !important;
+  right: 8px !important;
+}
+
+/* Reactions Badge layout adjustments */
+.reactions-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-top: 4px;
+  position: absolute;
+  bottom: -10px;
+  right: 12px;
+  background-color: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  padding: 1px 6px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  z-index: 5;
+}
+
+.reaction-badge {
+  font-size: 12px;
+}
+
+/* ── Emoji Search Picker Modal ──────────────────────────────────────── */
+.emoji-search-picker {
+  background-color: #ffffff;
+  border-radius: 16px;
+  border: 1px solid #e2e8f0;
+  width: 280px;
+  height: 320px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+  z-index: 1000;
+  position: absolute;
+  bottom: 50px;
+  right: 0;
+  overflow: hidden;
+  animation: scale-up 0.15s ease-out;
+}
+
+.emoji-picker-search {
+  padding: 8px 12px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.emoji-picker-search input {
+  width: 100%;
+  padding: 6px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 13px;
+  outline: none;
+}
+
+.emoji-picker-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+}
+
+.emoji-picker-item {
+  font-size: 20px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.1s;
+}
+
+.emoji-picker-item:hover {
+  transform: scale(1.2);
+}
+
+
 

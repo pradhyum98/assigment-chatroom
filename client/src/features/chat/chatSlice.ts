@@ -32,7 +32,7 @@ interface ChatState {
   messages: Message[];
   loading: boolean;
   error: string | null;
-  typingUsers: Record<string, string>; // userId -> userName
+  typingUsers: Record<string, Record<string, string>>; // roomId -> { userId -> userName }
 }
 
 const initialState: ChatState = {
@@ -112,11 +112,15 @@ const chatSlice = createSlice({
         }
       });
     },
-    setTyping: (state, action: PayloadAction<{ userId: string; userName: string; isTyping: boolean }>) => {
-      if (action.payload.isTyping) {
-        state.typingUsers[action.payload.userId] = action.payload.userName;
+    setTyping: (state, action: PayloadAction<{ roomId: string; userId: string; userName: string; isTyping: boolean }>) => {
+      const { roomId, userId, userName, isTyping } = action.payload;
+      if (!state.typingUsers[roomId]) {
+        state.typingUsers[roomId] = {};
+      }
+      if (isTyping) {
+        state.typingUsers[roomId][userId] = userName;
       } else {
-        delete state.typingUsers[action.payload.userId];
+        delete state.typingUsers[roomId][userId];
       }
     },
     clearTyping: (state) => {
