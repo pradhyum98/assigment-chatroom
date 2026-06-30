@@ -7,6 +7,7 @@ export interface Friend {
   lastName: string;
   email: string;
   publicKey?: string;
+  isOnline?: boolean;
 }
 
 export interface FriendRequest {
