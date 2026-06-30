@@ -171,10 +171,11 @@ export const setupSocketHandlers = (io: Server) => {
     }
     userSockets.get(userId)!.add(socket);
 
-    // Mark user online and broadcast presence to all their rooms
+    // Mark user online, auto-join all their rooms, and broadcast presence
     await User.updateOne({ _id: user._id }, { isOnline: true, lastSeen: new Date() });
     const userRooms = await ChatRoom.find({ participants: user._id }, { roomId: 1 }).lean();
     userRooms.forEach(({ roomId }) => {
+      socket.join(roomId);
       socket.to(roomId).emit('presence_update', {
         userId,
         isOnline: true,

@@ -58,6 +58,17 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
     return name.charAt(0).toUpperCase();
   };
 
+  const isRoomOnline = (room: Room) => {
+    if (room.isOnline !== undefined) return room.isOnline;
+    if (room.isDM) {
+      const otherParticipant = room.participants?.find(
+        (p: any) => p._id !== user?._id
+      );
+      return otherParticipant?.isOnline || false;
+    }
+    return false;
+  };
+
   const filteredDMs = rooms.filter(
     (room) =>
       room.isDM &&
@@ -162,42 +173,45 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
         </div>
         <div className="room-list" style={{ borderTop: 'none', padding: '0' }}>
           {filteredDMs.length > 0 ? (
-            filteredDMs.map((room: Room) => (
-              <div 
-                key={room.roomId} 
-                className={`room-item ${currentRoom?.roomId === room.roomId ? 'active' : ''}`}
-                onClick={() => handleRoomSelect(room)}
-              >
-                <div className="avatar-wrapper">
-                  <div 
-                    className="room-avatar" 
-                    style={room.avatarColor ? { backgroundColor: room.avatarColor } : {}}
-                  >
-                    {getRoomAvatarChar(room)}
+            filteredDMs.map((room: Room) => {
+              const unreadCount = room.unreadCounts?.[user?._id || ''] || 0;
+              return (
+                <div 
+                  key={room.roomId} 
+                  className={`room-item ${currentRoom?.roomId === room.roomId ? 'active' : ''}`}
+                  onClick={() => handleRoomSelect(room)}
+                >
+                  <div className="avatar-wrapper">
+                    <div 
+                      className="room-avatar" 
+                      style={room.avatarColor ? { backgroundColor: room.avatarColor } : {}}
+                    >
+                      {getRoomAvatarChar(room)}
+                    </div>
+                    {isRoomOnline(room) && <div className="status-dot"></div>}
                   </div>
-                  {room.isOnline !== false && <div className="status-dot"></div>}
+                  
+                  <div className="room-info">
+                    <div className="room-top">
+                      <span className="room-name">{getRoomDisplayName(room)}</span>
+                      <span className="room-time">
+                        {new Date(room.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                    <div className="room-bottom">
+                      <span className="room-preview">
+                        {(room.previewText?.length ?? 0) > 35 
+                          ? room.previewText!.substring(0, 35) + '...' 
+                          : room.previewText || 'Click to start chatting'}
+                      </span>
+                      {unreadCount > 0 && (
+                        <span className="unread-badge">{unreadCount}</span>
+                      )}
+                    </div>
+                  </div>
                 </div>
-                
-                <div className="room-info">
-                  <div className="room-top">
-                    <span className="room-name">{getRoomDisplayName(room)}</span>
-                    <span className="room-time">
-                      {new Date(room.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                  </div>
-                  <div className="room-bottom">
-                    <span className="room-preview">
-                      {(room.previewText?.length ?? 0) > 35 
-                        ? room.previewText!.substring(0, 35) + '...' 
-                        : room.previewText || 'Click to start chatting'}
-                    </span>
-                    {!!room.unreadCount && room.unreadCount > 0 && (
-                      <span className="unread-badge">{room.unreadCount}</span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))
+              );
+            })
           ) : (
             <div style={{ padding: '12px 24px', fontSize: '13px', color: '#94A3B8', fontStyle: 'italic' }}>
               No messages. Click the friend icon to add someone!
@@ -211,41 +225,44 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
         </div>
         <div className="room-list" style={{ borderTop: 'none', padding: '0' }}>
           {filteredGroups.length > 0 ? (
-            filteredGroups.map((room: Room) => (
-              <div 
-                key={room.roomId} 
-                className={`room-item ${currentRoom?.roomId === room.roomId ? 'active' : ''}`}
-                onClick={() => handleRoomSelect(room)}
-              >
-                <div className="avatar-wrapper">
-                  <div 
-                    className="room-avatar" 
-                    style={room.avatarColor ? { backgroundColor: room.avatarColor } : {}}
-                  >
-                    {getRoomAvatarChar(room)}
+            filteredGroups.map((room: Room) => {
+              const unreadCount = room.unreadCounts?.[user?._id || ''] || 0;
+              return (
+                <div 
+                  key={room.roomId} 
+                  className={`room-item ${currentRoom?.roomId === room.roomId ? 'active' : ''}`}
+                  onClick={() => handleRoomSelect(room)}
+                >
+                  <div className="avatar-wrapper">
+                    <div 
+                      className="room-avatar" 
+                      style={room.avatarColor ? { backgroundColor: room.avatarColor } : {}}
+                    >
+                      {getRoomAvatarChar(room)}
+                    </div>
+                  </div>
+                  
+                  <div className="room-info">
+                    <div className="room-top">
+                      <span className="room-name">{getRoomDisplayName(room)}</span>
+                      <span className="room-time">
+                        {new Date(room.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                    <div className="room-bottom">
+                      <span className="room-preview">
+                        {(room.previewText?.length ?? 0) > 35 
+                          ? room.previewText!.substring(0, 35) + '...' 
+                          : room.previewText || 'No messages yet.'}
+                      </span>
+                      {unreadCount > 0 && (
+                        <span className="unread-badge">{unreadCount}</span>
+                      )}
+                    </div>
                   </div>
                 </div>
-                
-                <div className="room-info">
-                  <div className="room-top">
-                    <span className="room-name">{getRoomDisplayName(room)}</span>
-                    <span className="room-time">
-                      {new Date(room.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                  </div>
-                  <div className="room-bottom">
-                    <span className="room-preview">
-                      {(room.previewText?.length ?? 0) > 35 
-                        ? room.previewText!.substring(0, 35) + '...' 
-                        : room.previewText || 'No messages yet.'}
-                    </span>
-                    {!!room.unreadCount && room.unreadCount > 0 && (
-                      <span className="unread-badge">{room.unreadCount}</span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))
+              );
+            })
           ) : (
             <div style={{ padding: '12px 24px', fontSize: '13px', color: '#94A3B8', fontStyle: 'italic' }}>
               No groups.

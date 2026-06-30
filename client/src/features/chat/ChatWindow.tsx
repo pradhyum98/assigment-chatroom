@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { setMessages, clearTyping } from './chatSlice';
 import { clearUnreadCount, setCurrentRoom } from '../rooms/roomsSlice';
@@ -12,6 +12,7 @@ import remarkGfm from 'remark-gfm';
 import DOMPurify from 'dompurify';
 import { useCrypto } from '../../hooks/useCrypto';
 import { CryptoService } from '../../services/cryptoService';
+import { ImageViewer } from './ImageViewer';
 import './Chat.css';
 
 const getMediaUrl = (urlPath: string) => {
@@ -41,6 +42,11 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
   const [showMembers, setShowMembers] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const { getRoomKey, encryptPayload, decryptPayload } = useCrypto();
+
+  const [activeImageView, setActiveImageView] = useState<string | null>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const scrollStateRef = useRef({ prevScrollHeight: 0, prevScrollTop: 0, adjustScroll: false });
+  const lastRoomIdRef = useRef<string | null>(null);
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null);
@@ -238,6 +244,13 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
 
   const loadMoreMessages = async () => {
     if (!currentRoom || messages.length === 0) return;
+    
+    if (messagesContainerRef.current) {
+      scrollStateRef.current.prevScrollHeight = messagesContainerRef.current.scrollHeight;
+      scrollStateRef.current.prevScrollTop = messagesContainerRef.current.scrollTop;
+      scrollStateRef.current.adjustScroll = true;
+    }
+    
     setIsLoadingMore(true);
     try {
       const beforeDate = messages[0].timestamp;
@@ -288,11 +301,39 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
     }
   };
 
-  useEffect(() => {
-    if (!isLoadingMore) {
+  useLayoutEffect(() => {
+    if (!messagesContainerRef.current) return;
+
+    const currentRoomId = currentRoom?.roomId || null;
+    const isNewRoom = currentRoomId !== lastRoomIdRef.current;
+    lastRoomIdRef.current = currentRoomId;
+
+    if (isNewRoom) {
+      // On new room loading, scroll to the bottom
       messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+      scrollStateRef.current.adjustScroll = false;
+      return;
     }
-  }, [messages, typingUsers]);
+
+    if (scrollStateRef.current.adjustScroll) {
+      // Adjust scroll position after prepending messages
+      const nextScrollHeight = messagesContainerRef.current.scrollHeight;
+      const diff = nextScrollHeight - scrollStateRef.current.prevScrollHeight;
+      messagesContainerRef.current.scrollTop = scrollStateRef.current.prevScrollTop + diff;
+      scrollStateRef.current.adjustScroll = false;
+      setIsLoadingMore(false);
+    } else {
+      const container = messagesContainerRef.current;
+      const isNearBottom = container.scrollHeight - container.clientHeight - container.scrollTop < 250;
+      
+      const lastMsg = messages[messages.length - 1];
+      const isSentByMe = lastMsg && lastMsg.senderId === user?._id;
+
+      if (isSentByMe || isNearBottom) {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+      }
+    }
+  }, [messages, currentRoom, user]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setNewMessage(e.target.value);
@@ -626,7 +667,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
         </div>
       )}
 
-      <div className="messages-area">
+      <div ref={messagesContainerRef} className="messages-area">
         {isLoading && (
           <div className="loading-indicator">
             <Loader2 className="loading-spinner" />
@@ -681,7 +722,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
                       </div>
                     )}
                     {msg.type === 'image' && msg.mediaUrl && (
-                      <div className="media-wrapper">
+                      <div className="media-wrapper" onClick={() => setActiveImageView(msg.decryptedMediaUrl || getMediaUrl(msg.mediaUrl))} style={{ cursor: 'pointer' }}>
                         <img 
                           src={msg.decryptedMediaUrl || getMediaUrl(msg.mediaUrl)} 
                           alt={msg.mediaFilename} 
@@ -861,6 +902,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
           )}
         </form>
       </div>
+      {activeImageView && (
+        <ImageViewer src={activeImageView} onClose={() => setActiveImageView(null)} />
+      )}
     </div>
   );
 };

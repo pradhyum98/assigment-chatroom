@@ -10,15 +10,27 @@ class SocketService {
   }
 
   connect() {
-    if (this.socket?.connected) {
+    const token = localStorage.getItem('token');
+    if (!token) return null;
+
+    if (this.socket) {
+      if (this.socket.connected && (this.socket.auth as any)?.token === token) {
+        return this.socket;
+      }
+      (this.socket.auth as any) = { token };
+      this.socket.disconnect().connect();
       return this.socket;
     }
-    
-    const token = localStorage.getItem('token');
+
     this.socket = io(SOCKET_URL, {
       auth: {
         token,
       },
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000,
     });
     return this.socket;
   }
@@ -84,6 +96,48 @@ class SocketService {
   offMessageReceived(callback: (message: any) => void) {
     if (this.socket) {
       this.socket.off('message_received', callback);
+    }
+  }
+
+  offMessageEdited(callback: (data: any) => void) {
+    if (this.socket) {
+      this.socket.off('message_edited', callback);
+    }
+  }
+
+  offMessageDeleted(callback: (data: any) => void) {
+    if (this.socket) {
+      this.socket.off('message_deleted', callback);
+    }
+  }
+
+  offReactionUpdated(callback: (data: any) => void) {
+    if (this.socket) {
+      this.socket.off('reaction_updated', callback);
+    }
+  }
+
+  offMessagesRead(callback: (data: any) => void) {
+    if (this.socket) {
+      this.socket.off('messages_read', callback);
+    }
+  }
+
+  offMessagesDelivered(callback: (data: any) => void) {
+    if (this.socket) {
+      this.socket.off('messages_delivered', callback);
+    }
+  }
+
+  offUserTyping(callback: (data: any) => void) {
+    if (this.socket) {
+      this.socket.off('user_typing', callback);
+    }
+  }
+
+  offPresenceUpdate(callback: (data: any) => void) {
+    if (this.socket) {
+      this.socket.off('presence_update', callback);
     }
   }
 

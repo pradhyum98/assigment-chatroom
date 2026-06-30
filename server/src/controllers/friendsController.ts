@@ -315,7 +315,7 @@ export const getFriendsList = async (
 
     // Fetch the user object and populate the friends field
     const userWithFriends = await User.findById(user._id)
-      .populate('friends', 'firstName lastName email publicKey')
+      .populate('friends', 'firstName lastName email publicKey isOnline lastSeen')
       .lean();
 
     res.status(200).json({

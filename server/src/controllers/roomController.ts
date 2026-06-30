@@ -59,7 +59,7 @@ export const createOrGetDM = async (
     });
 
     if (room) {
-      const populated = await room.populate('participants', 'firstName lastName email');
+      const populated = await room.populate('participants', 'firstName lastName email isOnline lastSeen publicKey');
       res.status(200).json({
         success: true,
         message: 'DM room retrieved.',
@@ -94,7 +94,7 @@ export const createOrGetDM = async (
           participants: { $all: participantIds, $size: 2 },
         });
         if (room) {
-          const populated = await room.populate('participants', 'firstName lastName email');
+          const populated = await room.populate('participants', 'firstName lastName email isOnline lastSeen publicKey');
           res.status(200).json({
             success: true,
             message: 'DM room retrieved.',
@@ -106,7 +106,7 @@ export const createOrGetDM = async (
       throw err;
     }
 
-    const populated = await room.populate('participants', 'firstName lastName email');
+    const populated = await room.populate('participants', 'firstName lastName email isOnline lastSeen publicKey');
 
     res.status(201).json({
       success: true,
@@ -168,7 +168,10 @@ export const createRoom = async (
       encryptedRoomKeys,
     });
 
-    const populated = await room.populate('createdBy', 'firstName lastName email');
+    const populated = await room.populate([
+      { path: 'createdBy', select: 'firstName lastName email' },
+      { path: 'participants', select: 'firstName lastName email isOnline lastSeen publicKey' }
+    ]);
 
     auditLog.dmRoomCreated(room.roomId, user.email, validParticipants);
 
@@ -198,7 +201,7 @@ export const getRooms = async (
       participants: user._id,
     })
       .populate('createdBy', 'firstName lastName email')
-      .populate('participants', 'firstName lastName email')
+      .populate('participants', 'firstName lastName email isOnline lastSeen publicKey')
       .sort({ updatedAt: -1 })
       .lean();
 
