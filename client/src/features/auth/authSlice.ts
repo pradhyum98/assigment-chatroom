@@ -21,7 +21,7 @@ const initialState: AuthState = {
   user: JSON.parse(localStorage.getItem('user') || 'null'),
   token: localStorage.getItem('token'),
   isAuthenticated: !!localStorage.getItem('token'),
-  loading: false,
+  loading: !!localStorage.getItem('token'), // Show loader on startup if token exists
   error: null,
 };
 
@@ -49,12 +49,16 @@ const authSlice = createSlice({
       state.user = null;
       state.token = null;
       state.isAuthenticated = false;
+      state.loading = false;
       localStorage.removeItem('user');
       localStorage.removeItem('token');
+      localStorage.removeItem('e2e_private_key');
+      localStorage.removeItem('last_active_room_id');
     },
     updateUser: (state, action: PayloadAction<User>) => {
       state.user = action.payload;
       state.isAuthenticated = true;
+      state.loading = false;
       localStorage.setItem('user', JSON.stringify(action.payload));
     },
     clearError: (state) => {

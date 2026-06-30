@@ -9,13 +9,11 @@ import {
   deleteMessage, 
   updateMessageReactions, 
   updateMessageReceipts, 
-  setTyping,
-  setMessages
+  setTyping
 } from './chatSlice';
-import api from '../../services/api';
-import { setRooms, updateRoomPreview, updatePresence, setCurrentRoom } from '../rooms/roomsSlice';
-import { setFriends, setPendingRequests } from '../friends/friendsSlice';
+import { updateRoomPreview, updatePresence, setCurrentRoom } from '../rooms/roomsSlice';
 import { useCrypto } from '../../hooks/useCrypto';
+import { syncManager } from '../../services/syncManager';
 import './Chat.css';
 
 const ChatRoom: React.FC = () => {
@@ -64,108 +62,36 @@ const ChatRoom: React.FC = () => {
   useEffect(() => {
     if (!isAuthenticated) return;
 
-    let lastSync = 0;
-    const syncData = async () => {
-      const now = Date.now();
-      if (now - lastSync < 5000) return; // rate limit sync to once every 5 seconds
-      lastSync = now;
+    syncManager.init();
 
-      console.log('[PWA Sync] Syncing chats, friends, and presence...');
-      
-      // Auto-connect or refresh socket
-      socketService.connect();
-
-      // Sync rooms
-      try {
-        const response = await api.get('/rooms');
-        dispatch(setRooms(response.data.data.rooms));
-      } catch (err) {
-        console.error('Failed to sync rooms:', err);
-      }
-
-      // Sync friends & requests
-      try {
-        const [requestsRes, friendsRes] = await Promise.all([
-          api.get('/friends/requests'),
-          api.get('/friends/list'),
-        ]);
-        dispatch(setPendingRequests(requestsRes.data.data.requests));
-        dispatch(setFriends(friendsRes.data.data.friends));
-      } catch (err) {
-        console.error('Failed to sync friends data:', err);
-      }
-
-      // Sync active room messages if any
-      const activeRoom = currentRoomRef.current;
-      if (activeRoom) {
-        try {
-          const response = await api.get(`/messages/${activeRoom.roomId}`);
-          let fetchedMessages = response.data.data.messages;
-
-          const roomKey = await getRoomKey(activeRoom.roomId, activeRoom.encryptedRoomKeys);
-          if (roomKey) {
-            fetchedMessages = await Promise.all(fetchedMessages.map(async (msg: any) => {
-              let processedMsg = { ...msg };
-              if (msg.iv && msg.content) {
-                try {
-                  processedMsg.content = await decryptPayload(msg.content, msg.iv, roomKey);
-                } catch (e) {
-                  console.error('Failed to decrypt message during sync', msg.messageId, e);
-                  processedMsg.content = '[Decryption Failed]';
-                }
-              }
-              return processedMsg;
-            }));
-          }
-          dispatch(setMessages(fetchedMessages));
-
-          // Mark messages as read
-          if (fetchedMessages.length > 0 && userRef.current) {
-            const currentUserId = userRef.current._id;
-            const unreadMessageIds = fetchedMessages
-              .filter((m: any) => m.senderId !== currentUserId && !m.readBy?.some((r: any) => r.userId === currentUserId))
-              .map((m: any) => m.messageId || m._id);
-            if (unreadMessageIds.length > 0) {
-              socketService.markAsRead({ roomId: activeRoom.roomId, messageIds: unreadMessageIds });
-              api.post(`/messages/${activeRoom.roomId}/read`, { messageIds: unreadMessageIds }).catch(err => {
-                console.error('Failed to mark messages as read on sync:', err);
-              });
-            }
-          }
-        } catch (err) {
-          console.error('Failed to sync active room messages:', err);
-        }
-      }
+    const handleSync = () => {
+      syncManager.syncOnReconnect();
     };
 
-    // Run sync on mount/initiation
-    syncData();
-
-    // Bind PWA focus / resume / online / visibilitychange events
-    window.addEventListener('focus', syncData);
-    window.addEventListener('online', syncData);
-    window.addEventListener('pageshow', syncData);
+    window.addEventListener('focus', handleSync);
+    window.addEventListener('online', handleSync);
+    window.addEventListener('pageshow', handleSync);
     
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
-        syncData();
+        handleSync();
       }
     };
     document.addEventListener('visibilitychange', handleVisibility);
 
     return () => {
-      window.removeEventListener('focus', syncData);
-      window.removeEventListener('online', syncData);
-      window.removeEventListener('pageshow', syncData);
+      window.removeEventListener('focus', handleSync);
+      window.removeEventListener('online', handleSync);
+      window.removeEventListener('pageshow', handleSync);
       document.removeEventListener('visibilitychange', handleVisibility);
-      socketService.disconnect();
     };
-  }, [isAuthenticated, dispatch, getRoomKey, decryptPayload]);
+  }, [isAuthenticated]);
 
   // ── Room Navigation Auto-Collapse ────────────────────────────────────────
   useEffect(() => {
     if (currentRoom) {
       socketService.joinRoom(currentRoom.roomId);
+      localStorage.setItem('last_active_room_id', currentRoom.roomId);
       if (isMobile()) {
         setIsSidebarOpen(false);
       }

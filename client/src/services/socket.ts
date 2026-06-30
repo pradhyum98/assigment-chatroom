@@ -35,6 +35,25 @@ class SocketService {
     return this.socket;
   }
 
+  waitForConnection(): Promise<void> {
+    return new Promise((resolve) => {
+      if (this.socket?.connected) {
+        resolve();
+        return;
+      }
+      if (!this.socket) {
+        this.connect();
+      }
+      this.socket?.once('connect', () => {
+        resolve();
+      });
+      // Set a fallback timeout so we don't hang startup if connection is slow
+      setTimeout(() => {
+        resolve();
+      }, 3000);
+    });
+  }
+
   joinRoom(roomId: string) {
     if (this.socket) {
       this.socket.emit('join_room', roomId);

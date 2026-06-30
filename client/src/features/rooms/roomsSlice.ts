@@ -39,7 +39,33 @@ const roomsSlice = createSlice({
   initialState,
   reducers: {
     setRooms: (state, action: PayloadAction<Room[]>) => {
-      state.rooms = action.payload;
+      const mergedRooms = action.payload.map(newRoom => {
+        const existing = state.rooms.find(r => r.roomId === newRoom.roomId);
+        if (existing) {
+          return {
+            ...existing,
+            ...newRoom,
+            unreadCounts: {
+              ...existing.unreadCounts,
+              ...newRoom.unreadCounts
+            },
+            isOnline: newRoom.isOnline !== undefined ? newRoom.isOnline : existing.isOnline,
+            lastSeen: newRoom.lastSeen !== undefined ? newRoom.lastSeen : existing.lastSeen,
+          };
+        }
+        return newRoom;
+      });
+      state.rooms = mergedRooms;
+
+      if (state.currentRoom) {
+        const fresh = mergedRooms.find(r => r.roomId === state.currentRoom!.roomId);
+        if (fresh) {
+          state.currentRoom = {
+            ...state.currentRoom,
+            ...fresh
+          };
+        }
+      }
     },
     setCurrentRoom: (state, action: PayloadAction<Room | null>) => {
       state.currentRoom = action.payload;

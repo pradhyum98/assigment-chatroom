@@ -44,6 +44,7 @@ export const getMessagesByRoom = async (
 
     const limit  = Math.min(parseInt(req.query['limit'] as string) || 50, 100);
     const before = req.query['before'] as string | undefined;
+    const sinceId = req.query['sinceId'] as string | undefined;
 
     const query: Record<string, unknown> = {
       roomId,
@@ -57,6 +58,13 @@ export const getMessagesByRoom = async (
         throw new AppError('The "before" timestamp provided is invalid.', 400);
       }
       query['timestamp'] = { $lt: beforeDate };
+    }
+
+    if (sinceId) {
+      if (!mongoose.Types.ObjectId.isValid(sinceId)) {
+        throw new AppError('The "sinceId" provided is invalid.', 400);
+      }
+      query['_id'] = { $gt: new mongoose.Types.ObjectId(sinceId) };
     }
 
     const messages = await Message.find(query)

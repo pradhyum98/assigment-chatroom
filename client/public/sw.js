@@ -25,13 +25,14 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// ── Fetch: network-first for API, cache-first for assets ─────────────────────
+// ── Fetch: network-first for HTML, cache-first for assets ─────────────────────
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // Skip non-GET and cross-origin requests
+  // Skip non-GET, dev hot reload, socket connections, and cross-origin requests
   if (request.method !== 'GET') return;
+  if (url.pathname.includes('hot-update') || url.pathname.includes('socket.io')) return;
   if (!url.origin.includes(self.location.hostname) && !url.hostname.includes('onrender.com')) return;
 
   // API calls: always try network first, never cache
@@ -40,7 +41,24 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Static assets: cache-first with network fallback
+  // Network-First for main root document, index.html, and manifest.json to prevent stale cached app shell
+  const isDocument = url.pathname === '/' || url.pathname.endsWith('.html') || url.pathname === '/manifest.json';
+  if (isDocument) {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (response.ok) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          }
+          return response;
+        })
+        .catch(() => caches.match(request).then((cached) => cached || new Response('Offline', { status: 503 })))
+    );
+    return;
+  }
+
+  // Static assets (hashed assets, images): cache-first with network fallback
   event.respondWith(
     caches.match(request).then((cached) => {
       if (cached) return cached;

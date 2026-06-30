@@ -18,6 +18,14 @@ export interface Message {
   readBy?: any[];
   deliveredTo?: any[];
   clientMsgId?: string;
+  decryptedMediaUrl?: string;
+  mediaUrl?: string;
+  mediaFilename?: string;
+  mediaMimeType?: string;
+  mediaSize?: number;
+  mediaKey?: string;
+  mediaIv?: string;
+  isOptimistic?: boolean;
 }
 
 interface ChatState {

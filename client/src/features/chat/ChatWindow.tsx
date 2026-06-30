@@ -13,6 +13,7 @@ import DOMPurify from 'dompurify';
 import { useCrypto } from '../../hooks/useCrypto';
 import { CryptoService } from '../../services/cryptoService';
 import { ImageViewer } from './ImageViewer';
+import { syncManager } from '../../services/syncManager';
 import './Chat.css';
 
 const getMediaUrl = (urlPath: string) => {
@@ -47,6 +48,22 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const scrollStateRef = useRef({ prevScrollHeight: 0, prevScrollTop: 0, adjustScroll: false });
   const lastRoomIdRef = useRef<string | null>(null);
+  const createdObjectUrlsRef = useRef<string[]>([]);
+
+  // ── Object URL Cleanup to Prevent Memory Leaks ─────────────────────────────
+  useEffect(() => {
+    return () => {
+      console.log('[Cleanup] Revoking decrypted object URLs:', createdObjectUrlsRef.current.length);
+      createdObjectUrlsRef.current.forEach((url) => {
+        try {
+          URL.revokeObjectURL(url);
+        } catch (e) {
+          console.error('Failed to revoke URL', e);
+        }
+      });
+      createdObjectUrlsRef.current = [];
+    };
+  }, [currentRoom?.roomId]);
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null);
@@ -180,17 +197,18 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
                 // Fetch the encrypted file
                 const fileRes = await fetch(getMediaUrl(msg.mediaUrl));
                 const encryptedBlob = await fileRes.blob();
-                const objectUrl = await CryptoService.decryptFile(
-                  encryptedBlob,
-                  msg.mediaKey,
-                  msg.mediaIv,
-                  msg.mediaMimeType || 'application/octet-stream'
-                );
-                processedMsg.decryptedMediaUrl = objectUrl;
-              } catch (e) {
-                console.error('Failed to decrypt media', msg.messageId, e);
-              }
-            }
+                 const objectUrl = await CryptoService.decryptFile(
+                   encryptedBlob,
+                   msg.mediaKey,
+                   msg.mediaIv,
+                   msg.mediaMimeType || 'application/octet-stream'
+                 );
+                 createdObjectUrlsRef.current.push(objectUrl);
+                 processedMsg.decryptedMediaUrl = objectUrl;
+               } catch (e) {
+                 console.error('Failed to decrypt media', msg.messageId, e);
+               }
+             }
 
             return processedMsg;
           }));
@@ -274,17 +292,18 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
             try {
               const fileRes = await fetch(getMediaUrl(msg.mediaUrl));
               const encryptedBlob = await fileRes.blob();
-              const objectUrl = await CryptoService.decryptFile(
-                encryptedBlob,
-                msg.mediaKey,
-                msg.mediaIv,
-                msg.mediaMimeType || 'application/octet-stream'
-              );
-              msg.decryptedMediaUrl = objectUrl;
-            } catch (e) {
-              console.error('Failed to decrypt media', msg.messageId, e);
-            }
-          }
+               const objectUrl = await CryptoService.decryptFile(
+                 encryptedBlob,
+                 msg.mediaKey,
+                 msg.mediaIv,
+                 msg.mediaMimeType || 'application/octet-stream'
+               );
+               createdObjectUrlsRef.current.push(objectUrl);
+               msg.decryptedMediaUrl = objectUrl;
+             } catch (e) {
+               console.error('Failed to decrypt media', msg.messageId, e);
+             }
+           }
 
           return msg;
         }));
@@ -450,7 +469,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
         })
       };
 
-      socketService.sendMessage(messageData);
+      syncManager.enqueueMessage(messageData);
       setNewMessage('');
       setReplyingTo(null);
       socketService.setTyping({ roomId: currentRoom.roomId, isTyping: false });
@@ -492,7 +511,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
         mediaIv: ivBase64,
       };
 
-      socketService.sendMessage(messageData);
+      syncManager.enqueueMessage(messageData);
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : 'Unknown error';
       alert(`Failed to send voice message: ${errorMsg}`);
@@ -521,11 +540,16 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
   };
 
   const handleReact = (msg: any, emoji: string) => {
-    if (!currentRoom) return;
-    socketService.reactToMessage({
-      messageId: msg.messageId || msg._id,
+    if (!currentRoom || !user) return;
+    syncManager.enqueueMessage({
       roomId: currentRoom.roomId,
-      emoji
+      senderId: user._id,
+      senderName: `${user.firstName} ${user.lastName}`,
+      content: '',
+      clientMsgId: msg.messageId || msg._id,
+      type: 'reaction',
+      isReaction: true,
+      reactionEmoji: emoji
     });
   };
 
@@ -903,7 +927,11 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
         </form>
       </div>
       {activeImageView && (
-        <ImageViewer src={activeImageView} onClose={() => setActiveImageView(null)} />
+        <ImageViewer 
+          images={messages.filter(m => m.type === 'image' && !m.deletedForEveryone).map(m => m.decryptedMediaUrl || getMediaUrl(m.mediaUrl || ''))} 
+          initialIndex={messages.filter(m => m.type === 'image' && !m.deletedForEveryone).map(m => m.decryptedMediaUrl || getMediaUrl(m.mediaUrl || '')).indexOf(activeImageView || '')} 
+          onClose={() => setActiveImageView(null)} 
+        />
       )}
     </div>
   );

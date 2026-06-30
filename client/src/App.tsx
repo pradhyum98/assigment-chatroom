@@ -1,14 +1,14 @@
 import React, { useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { useAppDispatch, useAppSelector } from './store/hooks';
-import { logout, updateUser } from './features/auth/authSlice';
+import { useAppSelector } from './store/hooks';
 import LoginPage from './features/auth/LoginPage';
 import SignupPage from './features/auth/SignupPage';
 import ChatRoom from './features/chat/ChatRoom';
 import { CallProvider } from './features/calls/CallContext';
 import './index.css';
-import api from './services/api';
 import { subscribeToPushNotifications } from './services/pushNotifications';
+
+import { syncManager } from './services/syncManager';
 
 const ProtectedRoute: React.FC<{ children: React.ReactElement }> = ({ children }) => {
   const { isAuthenticated, loading } = useAppSelector((state) => state.auth);
@@ -25,28 +25,14 @@ const ProtectedRoute: React.FC<{ children: React.ReactElement }> = ({ children }
 };
 
 const App: React.FC = () => {
-  const dispatch = useAppDispatch();
   const { token } = useAppSelector((state) => state.auth);
 
   useEffect(() => {
-    // Skip if already authenticated or no token exists
     if (!token) return;
 
-    const verifySession = async () => {
-      try {
-        const { data } = await api.get('/auth/me');
-        dispatch(updateUser(data.data.user));
-        
-        // Subscribe to push notifications once successfully authenticated
-        subscribeToPushNotifications();
-      } catch (err) {
-        console.error('Authentication check failed:', err);
-        dispatch(logout());
-      }
-    };
-
-    verifySession();
-  }, [token, dispatch]);
+    syncManager.bootstrap();
+    subscribeToPushNotifications();
+  }, [token]);
 
   return (
     <Router>
