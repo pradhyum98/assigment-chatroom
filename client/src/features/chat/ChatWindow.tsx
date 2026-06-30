@@ -5,7 +5,7 @@ import { clearUnreadCount, setCurrentRoom } from '../rooms/roomsSlice';
 import api from '../../services/api';
 import { UploadService } from '../../services/uploadService';
 import { socketService } from '../../services/socket';
-import { Send, Mic, Plus, CheckCheck, Check, Loader2, Edit2, Trash2, Smile, FileText, Download, Phone, Video, MessageSquare, X, Pin, ArrowLeft, Copy, Forward, Star, Image, File, VolumeX, Ban, Search } from 'lucide-react';
+import { Send, Mic, Plus, CheckCheck, Check, Loader2, Edit2, Trash2, Smile, FileText, Download, Phone, Video, MessageSquare, X, Pin, ArrowLeft, Copy, Forward, Star, Image, File, VolumeX, Ban, Search, Users, User } from 'lucide-react';
 import { useCall } from '../calls/CallContext';
 import VoiceRecorder from '../media/VoiceRecorder';
 import ReactMarkdown from 'react-markdown';
@@ -60,6 +60,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
   const [chatWallpaper, setChatWallpaper] = useState('#f8fafc');
   const [forwardMsg, setForwardMsg] = useState<any | null>(null);
   const [starredTrigger, setStarredTrigger] = useState(0);
+  const [showHeaderMenu, setShowHeaderMenu] = useState(false);
 
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const scrollStateRef = useRef({ prevScrollHeight: 0, prevScrollTop: 0, adjustScroll: false });
@@ -70,6 +71,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
     const handleOutsideClick = () => {
       setContextMenuMsg(null);
       setContextMenuPos(null);
+      setShowHeaderMenu(false);
     };
     window.addEventListener('click', handleOutsideClick);
     return () => window.removeEventListener('click', handleOutsideClick);
@@ -123,6 +125,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
   const [isUploading, setIsUploading] = useState(false);
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const videoInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     return () => {
@@ -785,23 +789,25 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
 
   return (
     <div className="chat-window fade-in">
+      {/* ══ Premium Header ══ */}
       <header className="chat-header">
+        {/* Left: back + avatar + name */}
         <div className="chat-user-info" onClick={() => setShowProfileDrawer(!showProfileDrawer)} style={{ cursor: 'pointer' }}>
-          <button 
-            className="back-btn mobile-only" 
+          <button
+            className="back-btn mobile-only"
             onClick={(e) => { e.stopPropagation(); onBack ? onBack() : dispatch(setCurrentRoom(null)); }}
-            title="Back to rooms"
+            title="Back"
           >
             <ArrowLeft size={20} />
           </button>
           <div className="avatar-wrapper">
-            <div 
+            <div
               className="chat-avatar"
               style={currentRoom.avatarColor ? { backgroundColor: currentRoom.avatarColor, color: 'white', border: 'none' } : {}}
             >
               {getRoomAvatarChar()}
             </div>
-            {currentRoom.isOnline !== false && <div className="status-dot"></div>}
+            {currentRoom.isOnline !== false && <div className="status-dot" />}
           </div>
           <div className="chat-user-details">
             <div className="chat-user-name">{getRoomDisplayName()}</div>
@@ -810,51 +816,113 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
             </div>
           </div>
         </div>
+
+        {/* Right: call buttons + search + ⋮ menu */}
         <div className="header-actions">
-          <button className={`action-btn ${showChatSearch ? 'active' : ''}`} onClick={() => setShowChatSearch(!showChatSearch)} title="Search Messages">
-            <Search size={20} />
-          </button>
-          <button className={`action-btn ${showPinned ? 'active' : ''}`} onClick={() => setShowPinned(!showPinned)} title="Pinned Messages">
-            <Pin size={20} />
-          </button>
-          {currentRoom.isDM ? (
+          {currentRoom.isDM && (
             <>
-              <button className="action-btn" onClick={handleStartCall} title="Start Voice Call">
-                <Phone size={20} />
+              <button className="action-btn" onClick={handleStartCall} title="Voice Call">
+                <Phone size={19} />
               </button>
-              <button className="action-btn" onClick={handleStartVideoCall} title="Start Video Call">
-                <Video size={20} />
+              <button className="action-btn" onClick={handleStartVideoCall} title="Video Call">
+                <Video size={19} />
               </button>
             </>
-          ) : (
-            <button className={`action-btn ${showMembers ? 'active' : ''}`} onClick={() => setShowMembers(!showMembers)} title="Group Members">
-              <MessageSquare size={20} />
-            </button>
           )}
+          <button
+            className={`action-btn ${showChatSearch ? 'active' : ''}`}
+            onClick={(e) => { e.stopPropagation(); setShowChatSearch(!showChatSearch); setShowHeaderMenu(false); }}
+            title="Search"
+          >
+            <Search size={19} />
+          </button>
+
+          {/* ⋮ Overflow menu */}
+          <div className="header-menu-container" onClick={(e) => e.stopPropagation()}>
+            <button
+              className={`action-btn ${showHeaderMenu ? 'active' : ''}`}
+              onClick={() => setShowHeaderMenu(!showHeaderMenu)}
+              title="More options"
+            >
+              <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor">
+                <circle cx="12" cy="5" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="12" cy="19" r="2" />
+              </svg>
+            </button>
+            {showHeaderMenu && (
+              <div className="header-dropdown-menu">
+                <button className="header-menu-item" onClick={() => { setShowProfileDrawer(true); setShowHeaderMenu(false); }}>
+                  <User size={15} /> View Profile
+                </button>
+                <button className="header-menu-item" onClick={() => { setShowChatSearch(true); setShowHeaderMenu(false); }}>
+                  <Search size={15} /> Search in Chat
+                </button>
+                <button className="header-menu-item" onClick={() => { setShowPinned(!showPinned); setShowHeaderMenu(false); }}>
+                  <Pin size={15} /> {showPinned ? 'Hide Pinned' : 'Pinned Messages'}
+                </button>
+                {!currentRoom.isDM && (
+                  <button className="header-menu-item" onClick={() => { setShowMembers(!showMembers); setShowHeaderMenu(false); }}>
+                    <Users size={15} /> Group Members
+                  </button>
+                )}
+                <div className="header-menu-divider" />
+                <button className="header-menu-item" onClick={() => {
+                  const muted = localStorage.getItem(`mute_${currentRoom.roomId}`) === 'true';
+                  localStorage.setItem(`mute_${currentRoom.roomId}`, muted ? 'false' : 'true');
+                  setStarredTrigger(p => p + 1);
+                  setShowHeaderMenu(false);
+                }}>
+                  <VolumeX size={15} /> {localStorage.getItem(`mute_${currentRoom.roomId}`) === 'true' ? 'Unmute' : 'Mute'}
+                </button>
+                <button className="header-menu-item danger-item" onClick={() => {
+                  if (confirm('Clear all local messages?')) {
+                    localStorage.setItem(`clear_chat_${currentRoom.roomId}`, new Date().toISOString());
+                    setStarredTrigger(p => p + 1);
+                  }
+                  setShowHeaderMenu(false);
+                }}>
+                  <Trash2 size={15} /> Clear Chat
+                </button>
+                <button className="header-menu-item danger-item" onClick={() => {
+                  if (confirm('Delete this chat for you?')) {
+                    const h = JSON.parse(localStorage.getItem('hidden_rooms') || '[]');
+                    if (!h.includes(currentRoom.roomId)) h.push(currentRoom.roomId);
+                    localStorage.setItem('hidden_rooms', JSON.stringify(h));
+                    dispatch(setCurrentRoom(null));
+                  }
+                  setShowHeaderMenu(false);
+                }}>
+                  <Ban size={15} /> Delete Chat
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
-      
+
+      {/* ── Inline search bar ── */}
       {showChatSearch && (
-        <div className="chat-search-bar" style={{ padding: '8px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', gap: '8px', backgroundColor: '#f8fafc' }}>
-          <input 
-            type="text" 
-            placeholder="Search messages..." 
+        <div className="chat-search-bar">
+          <Search size={15} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+          <input
+            type="text"
+            placeholder="Search in conversation…"
             value={chatSearchQuery}
             onChange={(e) => setChatSearchQuery(e.target.value)}
-            style={{ flex: 1, padding: '6px 12px', border: '1px solid #cbd5e1', borderRadius: '8px', outline: 'none', fontSize: '13px' }}
+            autoFocus
           />
-          <button onClick={() => { setShowChatSearch(false); setChatSearchQuery(''); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }}>
-            <X size={18} />
+          <button onClick={() => { setShowChatSearch(false); setChatSearchQuery(''); }}>
+            <X size={16} />
           </button>
         </div>
       )}
 
+      {/* ── Pinned messages banner ── */}
       {showPinned && currentRoom.pinnedMessages && currentRoom.pinnedMessages.length > 0 && (
         <div className="pinned-messages-list">
-          <h4>Pinned Messages</h4>
+          <h4>📌 Pinned Messages</h4>
           {currentRoom.pinnedMessages.map((msgId: string) => {
             const msg = messages.find((m: any) => m._id === msgId || m.messageId === msgId);
-            if (!msg) return <div key={msgId} className="pinned-item">Message {msgId}</div>;
+            if (!msg) return <div key={msgId} className="pinned-item">Message unavailable</div>;
             return (
               <div key={msgId} className="pinned-item">
                 <strong>{msg.senderName}:</strong> {msg.type === 'text' ? msg.content : `[${msg.type}]`}
@@ -864,16 +932,17 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
         </div>
       )}
 
+      {/* ── Group members banner ── */}
       {showMembers && !currentRoom.isDM && (
         <div className="pinned-messages-list">
-          <h4>Group Members</h4>
+          <h4>👥 Group Members</h4>
           {currentRoom.participants.map((p: any) => (
             <div key={p._id} className="pinned-item" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span>{p.firstName} {p.lastName} {p._id === user?._id ? '(You)' : ''}</span>
               {(currentRoom as any).admins?.includes(user?._id) && p._id !== user?._id && (
-                <button 
+                <button
                   onClick={() => handleRemoveMember(p._id)}
-                  style={{ background: 'transparent', border: '1px solid #ef4444', color: '#ef4444', padding: '2px 8px', borderRadius: '4px', cursor: 'pointer' }}
+                  style={{ background: 'transparent', border: '1px solid #ef4444', color: '#ef4444', padding: '2px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: 12 }}
                 >
                   Remove
                 </button>
@@ -1095,30 +1164,83 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
             />
           ) : (
             <>
-              <input 
-                type="file"
-                ref={fileInputRef}
-                style={{ display: 'none' }}
-                onChange={handleFileChange}
-              />
+              {/* Hidden file inputs with type-specific accept */}
+              <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={handleFileChange} />
+              <input type="file" ref={imageInputRef} style={{ display: 'none' }} accept="image/*" onChange={handleFileChange} />
+              <input type="file" ref={videoInputRef} style={{ display: 'none' }} accept="video/*" onChange={handleFileChange} />
+
+              {/* Attachment bottom-sheet */}
               <div className="attachment-popover-container">
-                <button type="button" className="action-btn" onClick={() => setShowAttachmentPopover(!showAttachmentPopover)} disabled={isUploading}>
+                <button
+                  type="button"
+                  className={`action-btn ${showAttachmentPopover ? 'active' : ''}`}
+                  onClick={(e) => { e.stopPropagation(); setShowAttachmentPopover(!showAttachmentPopover); }}
+                  disabled={isUploading}
+                  title="Attach"
+                >
                   <Plus size={22} />
                 </button>
+
                 {showAttachmentPopover && (
-                  <div className="attachment-popover" onClick={(e) => e.stopPropagation()}>
-                    <button type="button" className="attachment-option" onClick={() => { fileInputRef.current?.click(); setShowAttachmentPopover(false); }}>
-                      <div className="attachment-icon-wrapper" style={{ backgroundColor: '#25D366' }}><Image size={18} /></div>
-                      <span>Gallery</span>
-                    </button>
-                    <button type="button" className="attachment-option" onClick={() => { fileInputRef.current?.click(); setShowAttachmentPopover(false); }}>
-                      <div className="attachment-icon-wrapper" style={{ backgroundColor: '#007AFF' }}><File size={18} /></div>
-                      <span>Document</span>
-                    </button>
-                    <button type="button" className="attachment-option" onClick={() => { alert('Location sharing is simulated.'); setShowAttachmentPopover(false); }}>
-                      <div className="attachment-icon-wrapper" style={{ backgroundColor: '#FF9500' }}><Pin size={18} /></div>
-                      <span>Location</span>
-                    </button>
+                  <div className="attachment-bottom-sheet" onClick={(e) => e.stopPropagation()}>
+                    <div className="attachment-sheet-row">
+                      <button type="button" className="attachment-option" onClick={() => { imageInputRef.current?.setAttribute('capture', 'environment'); imageInputRef.current?.click(); setShowAttachmentPopover(false); }}>
+                        <div className="attachment-icon-wrapper" style={{ background: 'linear-gradient(135deg,#f59e0b,#ef4444)' }}>
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                        </div>
+                        <span>Camera</span>
+                      </button>
+                      <button type="button" className="attachment-option" onClick={() => { imageInputRef.current?.removeAttribute('capture'); imageInputRef.current?.click(); setShowAttachmentPopover(false); }}>
+                        <div className="attachment-icon-wrapper" style={{ background: 'linear-gradient(135deg,#10b981,#059669)' }}>
+                          <Image size={20} color="white" />
+                        </div>
+                        <span>Gallery</span>
+                      </button>
+                      <button type="button" className="attachment-option" onClick={() => { videoInputRef.current?.click(); setShowAttachmentPopover(false); }}>
+                        <div className="attachment-icon-wrapper" style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)' }}>
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+                        </div>
+                        <span>Video</span>
+                      </button>
+                      <button type="button" className="attachment-option" onClick={() => { fileInputRef.current?.click(); setShowAttachmentPopover(false); }}>
+                        <div className="attachment-icon-wrapper" style={{ background: 'linear-gradient(135deg,#3b82f6,#1d4ed8)' }}>
+                          <File size={20} color="white" />
+                        </div>
+                        <span>Document</span>
+                      </button>
+                    </div>
+                    <div className="attachment-sheet-row">
+                      <button type="button" className="attachment-option" onClick={() => {
+                        const input = document.createElement('input');
+                        input.type = 'file'; input.accept = 'audio/*';
+                        input.onchange = (e) => handleFileChange(e as any);
+                        input.click();
+                        setShowAttachmentPopover(false);
+                      }}>
+                        <div className="attachment-icon-wrapper" style={{ background: 'linear-gradient(135deg,#f43f5e,#e11d48)' }}>
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                        </div>
+                        <span>Audio</span>
+                      </button>
+                      <button type="button" className="attachment-option" onClick={() => { setShowAttachmentPopover(false); setIsRecordingVoice(true); }}>
+                        <div className="attachment-icon-wrapper" style={{ background: 'linear-gradient(135deg,#0ea5e9,#0284c7)' }}>
+                          <Mic size={20} color="white" />
+                        </div>
+                        <span>Voice Note</span>
+                      </button>
+                      <button type="button" className="attachment-option" onClick={() => { setShowAttachmentPopover(false); alert('📍 Location sharing coming soon.'); }}>
+                        <div className="attachment-icon-wrapper" style={{ background: 'linear-gradient(135deg,#f97316,#ea580c)' }}>
+                          <Pin size={20} color="white" />
+                        </div>
+                        <span>Location</span>
+                      </button>
+                      <button type="button" className="attachment-option" onClick={() => { setShowAttachmentPopover(false); alert('👤 Contact sharing coming soon.'); }}>
+                        <div className="attachment-icon-wrapper" style={{ background: 'linear-gradient(135deg,#64748b,#475569)' }}>
+                          <User size={20} color="white" />
+                        </div>
+                        <span>Contact</span>
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1204,29 +1326,32 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
 
       {/* ── Full Emoji Picker ── */}
       {showEmojiPickerMsg && (
-        <div className="emoji-search-picker" style={{ position: 'fixed', bottom: '70px', right: '20px' }}>
+        <div className="emoji-search-picker" onClick={(e) => e.stopPropagation()}>
           <div className="emoji-picker-search">
-            <input 
-              type="text" 
-              placeholder="Search emoji..." 
+            <Search size={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+            <input
+              type="text"
+              placeholder="Search emoji…"
               value={emojiSearch}
               onChange={(e) => setEmojiSearch(e.target.value)}
-              onClick={(e) => e.stopPropagation()}
+              autoFocus
             />
           </div>
           <div className="emoji-picker-list">
-            {['😀', '😂', '❤️', '👍', '😍', '😭', '🙏', '🔥', '👏', '🎉', '🌟', '👀', '💡', '🚀', '💯', '🤔', '💩', '😢', '🥳', '😎', '🤩', '😡', '👍', '👎', '✅', '❌', '✨', '🎈', '🎁', '🎂']
-              .filter(e => emojiSearch ? e.includes(emojiSearch) : true)
-              .map(emoji => (
-                <button 
-                  key={emoji} 
-                  className="emoji-picker-item" 
-                  onClick={() => { handleReact(showEmojiPickerMsg, emoji); setShowEmojiPickerMsg(null); setEmojiSearch(''); }}
-                >
-                  {emoji}
-                </button>
-              ))
-            }
+            {(emojiSearch
+              ? ['😀','😂','❤️','👍','😍','😭','🙏','🔥','👏','🎉','🌟','👀','💡','🚀','💯','🤔','💩','😢','🥳','😎','🤩','😡','👎','✅','❌','✨','🎈','🎁','🎂','💬','🗣️','👋','🤝','💪','🤦','🤷','🙌','👌','☝️','✌️','🤞','😇','🥺','😤','🤗','😬','🙄','😏','😒','😞','🥴','😴','🤒','🤓','🧐','🤯','🥶','🥵','😰','😱','🤮','🤧','😷','🤕','💀','👻','👾','🤖','💩','🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🌈','⭐','🌙','☀️','🌊','🏆','💎','🎯','🏠','🚗','✈️','🍕','🎵','📱','💻','🔑','🔒','❓','❗','♥️','♠️','♦️','♣️']
+                  .filter(e => !emojiSearch || e.includes(emojiSearch))
+              : ['😀','😂','❤️','👍','😍','😭','🙏','🔥','👏','🎉','🌟','👀','💡','🚀','💯','🤔','😢','🥳','😎','🤩','😡','👎','✅','❌','✨','🎈','🎁','💬','👋','🤝','💪','😇','🥺','😤','🤗','😬','🙄','😏','🙌','☝️','✌️','🤞','😞','🥴','😴','🤒','🤓','😰','😱','💀','👻','🤖','💩','🐶','🐱','🐻','🐼','🌈','⭐','🌙','☀️','🏆','💎','🎯','🎵','📱','💻','🔑','❓','❗']
+            ).map(emoji => (
+              <button
+                key={emoji}
+                className="emoji-picker-item"
+                onClick={() => { handleReact(showEmojiPickerMsg, emoji); setShowEmojiPickerMsg(null); setEmojiSearch(''); }}
+                title={emoji}
+              >
+                {emoji}
+              </button>
+            ))}
           </div>
         </div>
       )}
@@ -1284,23 +1409,114 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
         </div>
       )}
 
-      {/* ── Profile Drawer (WhatsApp-style Right Column) ── */}
+      {/* ══ Profile Drawer ══ */}
       {showProfileDrawer && (
         <div className="profile-drawer">
           <div className="drawer-header">
-            <h2>Chat Info</h2>
             <button className="drawer-close-btn" onClick={() => setShowProfileDrawer(false)}>
-              <X size={20} />
+              <ArrowLeft size={20} />
             </button>
+            <h2>Contact Info</h2>
           </div>
           <div className="drawer-content">
-            {/* Wallpaper picker */}
+
+            {/* ── Hero avatar ── */}
+            <div className="drawer-hero">
+              <div
+                className="drawer-hero-avatar"
+                style={currentRoom.avatarColor ? { backgroundColor: currentRoom.avatarColor } : {}}
+              >
+                {getRoomAvatarChar()}
+              </div>
+              <div className="drawer-hero-name">{getRoomDisplayName()}</div>
+              <div className="drawer-hero-status">
+                {currentRoom.isOnline !== false ? (
+                  <span className="drawer-online-pill">● Online</span>
+                ) : (
+                  <span className="drawer-offline-pill">○ Offline</span>
+                )}
+              </div>
+              {/* Quick action row */}
+              {currentRoom.isDM && (
+                <div className="drawer-quick-actions">
+                  <button className="drawer-quick-btn" onClick={handleStartCall} title="Voice Call">
+                    <Phone size={20} />
+                    <span>Call</span>
+                  </button>
+                  <button className="drawer-quick-btn" onClick={handleStartVideoCall} title="Video Call">
+                    <Video size={20} />
+                    <span>Video</span>
+                  </button>
+                  <button className="drawer-quick-btn" onClick={() => setShowChatSearch(true)} title="Search">
+                    <Search size={20} />
+                    <span>Search</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* ── Shared Media grid ── */}
+            <div className="drawer-section">
+              <div className="drawer-section-title">Shared Media</div>
+              <div className="drawer-media-grid">
+                {messages.filter(m => m.type === 'image' && (m.decryptedMediaUrl || m.mediaUrl) && !m.deletedForEveryone).slice(-6).map((m, i) => (
+                  <div
+                    key={i}
+                    className="drawer-media-thumb"
+                    onClick={() => setActiveImageView(m.decryptedMediaUrl || getMediaUrl(m.mediaUrl || ''))}
+                  >
+                    <img
+                      src={m.decryptedMediaUrl || getMediaUrl(m.mediaUrl || '')}
+                      alt="media"
+                      loading="lazy"
+                    />
+                  </div>
+                ))}
+                {messages.filter(m => m.type === 'image' && !m.deletedForEveryone).length === 0 && (
+                  <span className="drawer-empty-hint">No shared photos yet.</span>
+                )}
+              </div>
+            </div>
+
+            {/* ── Group members ── */}
+            {!currentRoom.isDM && (
+              <div className="drawer-section">
+                <div className="drawer-section-title">Members ({currentRoom.participants?.length || 0})</div>
+                <div className="drawer-members-list">
+                  {currentRoom.participants?.map((p: any) => (
+                    <div key={p._id} className="drawer-member-row">
+                      <div className="room-avatar" style={{ width: 36, height: 36, fontSize: 14, flexShrink: 0 }}>
+                        {p.firstName.charAt(0).toUpperCase()}
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-main)' }}>
+                          {p.firstName} {p.lastName} {p._id === user?._id ? '(You)' : ''}
+                        </div>
+                        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.email}</div>
+                      </div>
+                      {(currentRoom as any).admins?.includes(user?._id) && p._id !== user?._id && (
+                        <button
+                          className="create-room-btn"
+                          style={{ background: '#ef444415', color: '#ef4444' }}
+                          onClick={() => handleRemoveMember(p._id)}
+                          title="Remove"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ── Wallpaper ── */}
             <div className="drawer-section">
               <div className="drawer-section-title">Chat Wallpaper</div>
               <div className="wallpaper-grid">
-                {['#f8fafc', '#efeae2', '#e5ddd5', '#d1e7dd', '#f8d7da', '#cff4fc', '#ffe69c'].map(color => (
-                  <div 
-                    key={color} 
+                {['#f8fafc', '#efeae2', '#e5ddd5', '#d1e7dd', '#f8d7da', '#cff4fc', '#ffe69c', '#0f172a'].map(color => (
+                  <div
+                    key={color}
                     className={`wallpaper-color-box ${chatWallpaper === color ? 'active' : ''}`}
                     style={{ backgroundColor: color }}
                     onClick={() => { setChatWallpaper(color); localStorage.setItem(`wallpaper_${currentRoom.roomId}`, color); }}
@@ -1309,42 +1525,40 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
               </div>
             </div>
 
-            {/* Starred Messages */}
+            {/* ── Starred Messages ── */}
             <div className="drawer-section">
               <div className="drawer-section-title">Starred Messages</div>
-              <div style={{ maxHeight: '150px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                {messages.filter(m => isMessageStarred((m.messageId || m._id) || '')).length > 0 ? (
-                  messages.filter(m => isMessageStarred((m.messageId || m._id) || '')).map(m => (
-                    <div key={m.messageId} style={{ padding: '8px', backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '12px' }}>
-                      <div style={{ fontWeight: 'bold', marginBottom: '2px' }}>{m.senderName}</div>
-                      <div>{m.content || '[Media]'}</div>
+              <div style={{ maxHeight: 160, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {messages.filter(m => isMessageStarred(m.messageId || m._id || '')).length > 0
+                  ? messages.filter(m => isMessageStarred(m.messageId || m._id || '')).map(m => (
+                    <div key={m.messageId} className="drawer-starred-row">
+                      <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-secondary)', marginBottom: 2 }}>{m.senderName}</div>
+                      <div style={{ fontSize: 13, color: 'var(--text-main)' }}>{m.content || '[Media]'}</div>
                     </div>
                   ))
-                ) : (
-                  <span style={{ fontSize: '12px', color: '#94a3b8', fontStyle: 'italic' }}>No starred messages yet.</span>
-                )}
+                  : <span className="drawer-empty-hint">No starred messages.</span>
+                }
               </div>
             </div>
 
-            {/* Action buttons */}
+            {/* ── Actions ── */}
             <div className="drawer-section">
-              <div className="drawer-section-title">Actions</div>
               <div className="drawer-options">
-                <button 
-                  className="drawer-option-btn" 
+                <button
+                  className="drawer-option-btn"
                   onClick={() => {
                     const muted = localStorage.getItem(`mute_${currentRoom.roomId}`) === 'true';
                     localStorage.setItem(`mute_${currentRoom.roomId}`, muted ? 'false' : 'true');
                     setStarredTrigger(prev => prev + 1);
                   }}
                 >
-                  <VolumeX size={16} /> 
+                  <VolumeX size={16} />
                   {localStorage.getItem(`mute_${currentRoom.roomId}`) === 'true' ? 'Unmute Notifications' : 'Mute Notifications'}
                 </button>
-                <button 
-                  className="drawer-option-btn danger-btn" 
+                <button
+                  className="drawer-option-btn danger-btn"
                   onClick={() => {
-                    if (confirm('Clear all local messages in this conversation?')) {
+                    if (confirm('Clear all local messages?')) {
                       localStorage.setItem(`clear_chat_${currentRoom.roomId}`, new Date().toISOString());
                       setStarredTrigger(prev => prev + 1);
                       setShowProfileDrawer(false);
@@ -1353,15 +1567,13 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
                 >
                   <Trash2 size={16} /> Clear Chat
                 </button>
-                <button 
-                  className="drawer-option-btn danger-btn" 
-                  onClick={async () => {
-                    if (confirm('Delete this chat room?')) {
-                      const hiddenRooms = JSON.parse(localStorage.getItem('hidden_rooms') || '[]');
-                      if (!hiddenRooms.includes(currentRoom.roomId)) {
-                        hiddenRooms.push(currentRoom.roomId);
-                      }
-                      localStorage.setItem('hidden_rooms', JSON.stringify(hiddenRooms));
+                <button
+                  className="drawer-option-btn danger-btn"
+                  onClick={() => {
+                    if (confirm('Delete this chat for you?')) {
+                      const h = JSON.parse(localStorage.getItem('hidden_rooms') || '[]');
+                      if (!h.includes(currentRoom.roomId)) h.push(currentRoom.roomId);
+                      localStorage.setItem('hidden_rooms', JSON.stringify(h));
                       dispatch(setCurrentRoom(null));
                     }
                   }}

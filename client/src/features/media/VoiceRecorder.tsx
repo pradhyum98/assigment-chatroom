@@ -15,6 +15,7 @@ const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSend, onCancel }) => {
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [isPlayingPreview, setIsPlayingPreview] = useState(false);
   const [waveforms, setWaveforms] = useState<number[]>([]);
+  const [playbackSpeed, setPlaybackSpeed] = useState<1 | 1.5 | 2>(1);
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -131,6 +132,7 @@ const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSend, onCancel }) => {
 
   const togglePlayback = () => {
     if (!audioPreviewRef.current) return;
+    audioPreviewRef.current.playbackRate = playbackSpeed;
     if (isPlayingPreview) {
       audioPreviewRef.current.pause();
       setIsPlayingPreview(false);
@@ -138,6 +140,12 @@ const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSend, onCancel }) => {
       audioPreviewRef.current.play();
       setIsPlayingPreview(true);
     }
+  };
+
+  const cycleSpeed = () => {
+    const next = playbackSpeed === 1 ? 1.5 : playbackSpeed === 1.5 ? 2 : 1;
+    setPlaybackSpeed(next as 1 | 1.5 | 2);
+    if (audioPreviewRef.current) audioPreviewRef.current.playbackRate = next;
   };
 
   const formatTime = (seconds: number) => {
@@ -151,17 +159,27 @@ const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSend, onCancel }) => {
       {audioUrl ? (
         // Playback Preview mode
         <div className="audio-preview-mode">
-          <audio 
-            ref={audioPreviewRef} 
-            src={audioUrl} 
+          <audio
+            ref={audioPreviewRef}
+            src={audioUrl}
             onEnded={() => setIsPlayingPreview(false)}
             style={{ display: 'none' }}
           />
           <button type="button" className="action-btn preview-play-btn" onClick={togglePlayback}>
             {isPlayingPreview ? <Pause size={18} /> : <Play size={18} />}
           </button>
-          
-          <span className="preview-label">Review Voice Note</span>
+
+          <span className="preview-label">Voice Note</span>
+
+          {/* Speed selector */}
+          <button
+            type="button"
+            className="playback-speed-btn"
+            onClick={cycleSpeed}
+            title="Playback speed"
+          >
+            {playbackSpeed}x
+          </button>
 
           <div className="recording-actions">
             <button type="button" className="action-btn cancel-record-btn" onClick={onCancel} title="Delete">

@@ -466,3 +466,205 @@
     padding: 16px 16px 10px;
   }
 }
+
+/* ── Sidebar Bottom Navigation Tabs ── */
+.sidebar-bottom-nav {
+  display: flex;
+  justify-content: space-around;
+  background-color: var(--bg-sidebar);
+  border-top: var(--border-subtle);
+  padding: 10px 0;
+  height: 64px;
+}
+
+.nav-tab-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  flex: 1;
+  transition: all 0.2s ease;
+}
+
+.nav-tab-btn:hover {
+  color: var(--primary);
+}
+
+.nav-tab-btn.active {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.category-tabs-container {
+  display: flex;
+  gap: 8px;
+  padding: 0 24px 12px 24px;
+  overflow-x: auto;
+}
+
+.category-tab-pill {
+  padding: 6px 14px;
+  border-radius: 20px;
+  background-color: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.category-tab-pill:hover {
+  background-color: var(--bg-hover);
+}
+
+.category-tab-pill.active {
+  background-color: var(--primary);
+  color: var(--text-white);
+}
+
+/* Call items styling */
+.call-log-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  margin: 4px 16px;
+  border-radius: 16px;
+  background-color: var(--bg-sidebar);
+  cursor: pointer;
+  border: 1px solid var(--border-color);
+}
+
+.call-log-item:hover {
+  background-color: var(--bg-hover);
+}
+
+.call-meta-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.call-time-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.call-action-btn {
+  background: none;
+  border: none;
+  color: var(--primary);
+}
+
+/* Settings subpanel layout */
+.settings-menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+}
+
+.settings-menu-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-sidebar);
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.settings-menu-option:hover {
+  background-color: var(--bg-hover);
+}
+
+.settings-option-label {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.settings-subpanel-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 24px;
+  border-bottom: var(--border-subtle);
+}
+
+.settings-back-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+}
+
+.settings-subpanel-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+/* ── Inline friend row (People tab) ── */
+.friend-inline-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  margin: 2px 8px;
+  transition: background-color 0.15s ease;
+}
+
+.friend-inline-row:hover {
+  background-color: var(--bg-hover);
+}
+
+/* ── Section labels ── */
+.sidebar-section-label {
+  padding: 14px 24px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ── Empty state hint ── */
+.sidebar-empty-hint {
+  padding: 12px 24px;
+  font-size: 13px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ── Missed call label ── */
+.call-time-label.missed {
+  color: #ef4444;
+}
+
+/* ── Typing indicator on preview ── */
+.room-preview.typing {
+  color: var(--primary);
+  font-style: italic;
+}
+
+/* ── Search container adaptive background ── */
+.search-container {
+  background-color: var(--bg-input);
+}
+
+.search-container input::placeholder {
+  color: var(--text-muted);
+}
+
+
