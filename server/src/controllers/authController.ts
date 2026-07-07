@@ -7,7 +7,6 @@ import { signToken } from '../utils/auth';
 import { mapUserResponse } from '../utils/user';
 import { AuthRequest } from '../types';
 import { auditLog } from '../utils/auditLogger';
-import { encryptPasswordForRecovery } from '../utils/passwordRecovery';
 
 const signupSchema = z.object({
   firstName: z.string().min(2, 'First name is required (min 2 characters)').max(50),
@@ -47,16 +46,13 @@ export const signup = async (
       throw new AppError('This email is already registered. Try logging in instead.', 409);
     }
 
-    const encryptedPasswordRecovery = encryptPasswordForRecovery(password);
-
     const user = await User.create({ 
       firstName, 
       lastName, 
       email, 
       password, 
       publicKey, 
-      encryptedPrivateKey,
-      encryptedPasswordRecovery
+      encryptedPrivateKey
     });
     const token = signToken({ userId: user._id.toString(), email: user.email });
 
@@ -170,7 +166,6 @@ export const changePassword = async (
     if (!user) throw new AppError('User not found', 404);
 
     user.password = newPassword;
-    user.encryptedPasswordRecovery = encryptPasswordForRecovery(newPassword);
     
     await user.save();
 
