@@ -22,7 +22,9 @@ describe('Message Idempotency and Deduplication', () => {
     if (!mongoUri) {
       throw new Error('MONGODB_URI not defined');
     }
-    await mongoose.connect(mongoUri);
+    if (mongoose.connection.readyState === 0) {
+      await mongoose.connect(mongoUri);
+    }
     await Message.syncIndexes();
 
     // Create a clean test user

@@ -34,6 +34,10 @@ export interface UserDoc extends Document {
   privacyLastSeen: 'everyone' | 'friends' | 'nobody';
   privacyOnlineStatus: 'everyone' | 'friends' | 'nobody';
 
+  // Password reset fields
+  passwordResetToken?: string;
+  passwordResetExpires?: Date;
+
   createdAt: Date;
   updatedAt: Date;
 
@@ -138,6 +142,16 @@ const UserSchema = new Schema<UserDoc>(
       type: String,
       enum: ['everyone', 'friends', 'nobody'],
       default: 'friends',
+    },
+    passwordResetToken: {
+      type: String,
+      default: undefined,
+      select: false,
+    },
+    passwordResetExpires: {
+      type: Date,
+      default: undefined,
+      select: false,
     },
   },
   {

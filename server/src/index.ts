@@ -38,6 +38,12 @@ if (!process.env.MONGODB_URI) {
   process.exit(1);
 }
 
+// Fail fast if dev reset tokens are exposed in production
+if (process.env.NODE_ENV === 'production' && process.env.ALLOW_DEV_RESET_TOKEN_RESPONSE === 'true') {
+  logger.error('CRITICAL: ALLOW_DEV_RESET_TOKEN_RESPONSE is not allowed in production mode.');
+  process.exit(1);
+}
+
 const app = express();
 // REQUIRED for express-rate-limit when deployed behind a reverse proxy (Render, Vercel, Heroku, etc.)
 // Otherwise, req.ip will be the load balancer's IP and every user will share the same rate limit!

@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
+import crypto from 'crypto';
 import { User } from '../models/User';
 import { AppError } from '../middleware/errorHandler';
 import {  } from '../middleware/logger';
@@ -7,6 +8,7 @@ import { signToken } from '../utils/auth';
 import { mapUserResponse } from '../utils/user';
 import { AuthRequest } from '../types';
 import { auditLog } from '../utils/auditLogger';
+import { getEmailService } from '../services/EmailService';
 
 const signupSchema = z.object({
   firstName: z.string().min(2, 'First name is required (min 2 characters)').max(50),
@@ -172,6 +174,99 @@ export const changePassword = async (
     res.status(200).json({
       success: true,
       message: 'Password successfully changed and securely re-encrypted.',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const forgotPassword = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      throw new AppError('Please provide an email address', 400);
+    }
+
+    const user = await User.findOne({ email });
+    if (!user) {
+      res.status(200).json({
+        success: true,
+        message: 'If that email is registered, a password reset link has been sent.',
+      });
+      return;
+    }
+
+    const resetToken = crypto.randomBytes(32).toString('hex');
+
+    user.passwordResetToken = crypto
+      .createHash('sha256')
+      .update(resetToken)
+      .digest('hex');
+    user.passwordResetExpires = new Date(Date.now() + 3600000); // 1 hour expiry
+
+    await user.save();
+
+    const emailService = getEmailService();
+    const mailResult = await emailService.sendPasswordResetEmail(user.email, resetToken);
+
+    const responseData: any = {
+      success: true,
+      message: 'If that email is registered, a password reset link has been sent.',
+    };
+
+    const allowDevToken = process.env.ALLOW_DEV_RESET_TOKEN_RESPONSE === 'true';
+    if (process.env.NODE_ENV !== 'production' && allowDevToken && mailResult.devResetToken) {
+      responseData.devResetToken = mailResult.devResetToken;
+    }
+
+    res.status(200).json(responseData);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const resetPassword = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { token, newPassword } = req.body;
+    if (!token || !newPassword) {
+      throw new AppError('Token and new password are required', 400);
+    }
+
+    if (newPassword.length < 6) {
+      throw new AppError('Password must be at least 6 characters', 400);
+    }
+
+    const hashedToken = crypto
+      .createHash('sha256')
+      .update(token)
+      .digest('hex');
+
+    const user = await User.findOne({
+      passwordResetToken: hashedToken,
+      passwordResetExpires: { $gt: new Date() }
+    }).select('+passwordResetToken +passwordResetExpires');
+
+    if (!user) {
+      throw new AppError('Password reset token is invalid or has expired.', 400);
+    }
+
+    user.password = newPassword;
+    user.passwordResetToken = undefined;
+    user.passwordResetExpires = undefined;
+
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Password successfully reset.',
     });
   } catch (error) {
     next(error);
