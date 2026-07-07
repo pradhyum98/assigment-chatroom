@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import { User } from '../models/User';
 import { AppError } from '../middleware/errorHandler';
 import {  } from '../middleware/logger';
-import { signToken } from '../utils/auth';
+import { signToken, signAccessToken, signRefreshToken, setRefreshTokenCookie, clearRefreshTokenCookie, verifyToken } from '../utils/auth';
 import { mapUserResponse } from '../utils/user';
 import { AuthRequest } from '../types';
 import { auditLog } from '../utils/auditLogger';
@@ -56,7 +56,10 @@ export const signup = async (
       publicKey, 
       encryptedPrivateKey
     });
-    const token = signToken({ userId: user._id.toString(), email: user.email });
+    const accessToken = signAccessToken({ userId: user._id.toString(), email: user.email });
+    const refreshToken = signRefreshToken({ userId: user._id.toString(), email: user.email });
+
+    setRefreshTokenCookie(res, refreshToken);
 
     auditLog.registrationSuccess(email, req.ip || '');
 
@@ -64,7 +67,7 @@ export const signup = async (
       success: true,
       message: 'Account created!',
       data: {
-        token,
+        token: accessToken,
         user: mapUserResponse(user),
       },
     });
@@ -102,7 +105,10 @@ export const login = async (
       await user.save();
     }
 
-    const token = signToken({ userId: user._id.toString(), email: user.email });
+    const accessToken = signAccessToken({ userId: user._id.toString(), email: user.email });
+    const refreshToken = signRefreshToken({ userId: user._id.toString(), email: user.email });
+
+    setRefreshTokenCookie(res, refreshToken);
 
     auditLog.loginSuccess(email, ip);
 
@@ -110,7 +116,7 @@ export const login = async (
       success: true,
       message: 'Welcome back!',
       data: {
-        token,
+        token: accessToken,
         user: mapUserResponse(user),
       },
     });
@@ -147,10 +153,52 @@ export const logout = async (
   res: Response,
   next: NextFunction
 ): Promise<void> => {
+  clearRefreshTokenCookie(res);
   res.status(200).json({
     success: true,
     message: 'Logged out successfully',
   });
+};
+
+export const refresh = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const refreshToken = req.cookies?.refreshToken;
+    if (!refreshToken) {
+      throw new AppError('Refresh token is missing.', 401);
+    }
+
+    let decodedPayload: any;
+    try {
+      decodedPayload = verifyToken(refreshToken);
+    } catch (err) {
+      throw new AppError('Invalid or expired refresh token.', 401);
+    }
+
+    const user = await User.findById(decodedPayload.userId);
+    if (!user) {
+      throw new AppError('User belonging to this token no longer exists.', 401);
+    }
+
+    const newAccessToken = signAccessToken({ userId: user._id.toString(), email: user.email });
+    const newRefreshToken = signRefreshToken({ userId: user._id.toString(), email: user.email });
+
+    setRefreshTokenCookie(res, newRefreshToken);
+
+    res.status(200).json({
+      success: true,
+      message: 'Token refreshed successfully.',
+      data: {
+        token: newAccessToken,
+        user: mapUserResponse(user)
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
 };
 
 export const changePassword = async (

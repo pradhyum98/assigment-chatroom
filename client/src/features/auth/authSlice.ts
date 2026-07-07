@@ -1,5 +1,6 @@
 import { createSlice } from '@reduxjs/toolkit';
 import type { PayloadAction } from '@reduxjs/toolkit';
+import { setAccessToken } from '../../services/api';
 
 interface User {
   _id: string;
@@ -19,9 +20,9 @@ interface AuthState {
 
 const initialState: AuthState = {
   user: JSON.parse(localStorage.getItem('user') || 'null'),
-  token: localStorage.getItem('token'),
-  isAuthenticated: !!localStorage.getItem('token'),
-  loading: !!localStorage.getItem('token'), // Show loader on startup if token exists
+  token: null, // Always keep token in memory only
+  isAuthenticated: localStorage.getItem('hasSession') === 'true',
+  loading: localStorage.getItem('hasSession') === 'true', // Show loader on startup if session exists
   error: null,
 };
 
@@ -39,7 +40,8 @@ const authSlice = createSlice({
       state.token = action.payload.token;
       state.isAuthenticated = true;
       localStorage.setItem('user', JSON.stringify(action.payload.user));
-      localStorage.setItem('token', action.payload.token);
+      localStorage.setItem('hasSession', 'true');
+      setAccessToken(action.payload.token);
     },
     loginFailure: (state, action: PayloadAction<string>) => {
       state.loading = false;
@@ -51,9 +53,10 @@ const authSlice = createSlice({
       state.isAuthenticated = false;
       state.loading = false;
       localStorage.removeItem('user');
-      localStorage.removeItem('token');
+      localStorage.removeItem('hasSession');
       localStorage.removeItem('e2e_private_key');
       localStorage.removeItem('last_active_room_id');
+      setAccessToken(null);
     },
     updateUser: (state, action: PayloadAction<User>) => {
       state.user = action.payload;

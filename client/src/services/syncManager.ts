@@ -1,4 +1,4 @@
-import api from './api';
+import api, { getAccessToken } from './api';
 import { socketService } from './socket';
 import { store } from '../store';
 import { setRooms, setCurrentRoom } from '../features/rooms/roomsSlice';
@@ -63,7 +63,7 @@ class SyncManager {
 
   async bootstrap(): Promise<void> {
     console.log('[SyncManager] Starting bootstrap sequence...');
-    const token = localStorage.getItem('token');
+    const token = getAccessToken();
     if (!token) {
       store.dispatch(logout());
       return;

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { setMessages, clearTyping } from './chatSlice';
 import { clearUnreadCount, setCurrentRoom } from '../rooms/roomsSlice';
-import api from '../../services/api';
+import api, { getAccessToken } from '../../services/api';
 import { UploadService } from '../../services/uploadService';
 import { socketService } from '../../services/socket';
 import { Send, Mic, Plus, CheckCheck, Check, Loader2, Edit2, Trash2, Smile, FileText, Download, Phone, Video, MessageSquare, X, Pin, ArrowLeft, Copy, Forward, Star, Image, File, VolumeX, Ban, Search, Users, User, AlertTriangle } from 'lucide-react';
@@ -20,7 +20,7 @@ import './Chat.css';
 const getMediaUrl = (urlPath: string) => {
   if (!urlPath) return '';
   if (urlPath.startsWith('http')) return urlPath;
-  const token = localStorage.getItem('token');
+  const token = getAccessToken();
   const serverUrl = import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace(/\/api$/, '') : 'http://localhost:5001';
   return `${serverUrl}${urlPath}?token=${token}`;
 };

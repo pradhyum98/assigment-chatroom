@@ -14,6 +14,7 @@ import {
 import { updateRoomPreview, updatePresence, setCurrentRoom } from '../rooms/roomsSlice';
 import { useCrypto } from '../../hooks/useCrypto';
 import { syncManager } from '../../services/syncManager';
+import { getAccessToken } from '../../services/api';
 import './Chat.css';
 
 const ChatRoom: React.FC = () => {
@@ -127,7 +128,7 @@ const ChatRoom: React.FC = () => {
       if (hasMedia) {
         try {
           const serverUrl = import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace(/\/api$/, '') : 'http://localhost:5001';
-          const token = localStorage.getItem('token');
+          const token = getAccessToken();
           const fileUrl = message.mediaUrl.startsWith('http') ? message.mediaUrl : `${serverUrl}${message.mediaUrl}?token=${token}`;
           
           const fileRes = await fetch(fileUrl);

@@ -4,6 +4,7 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
+import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import connectDB from './config/db';
 import authRoutes from './routes/auth';
@@ -72,6 +73,7 @@ app.use(helmet({
     },
   },
 }));
+app.use(cookieParser());
 app.use(express.json({ limit: '10kb' })); // Restrict JSON payload sizes to prevent Denial of Service (DoS)
 app.use(compression()); // Compress responses
 app.use(cors(corsOptions));

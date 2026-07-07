@@ -1,4 +1,5 @@
 import { io, Socket } from 'socket.io-client';
+import { getAccessToken } from './api';
 
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:5001';
 
@@ -10,7 +11,7 @@ class SocketService {
   }
 
   connect() {
-    const token = localStorage.getItem('token');
+    const token = getAccessToken();
     if (!token) return null;
 
     if (this.socket) {
