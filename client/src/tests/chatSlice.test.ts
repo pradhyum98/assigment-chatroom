@@ -4,14 +4,14 @@ import chatReducer, {
   reconcileConfirmedMessage, 
   addMessage, 
   selectMessageExists,
-  Message 
+  type Message 
 } from '../features/chat/chatSlice';
 
 describe('chatSlice Reducers & Selectors', () => {
   const getInitialState = () => ({
     messages: [] as Message[],
     loading: false,
-    error: null,
+    error: null as string | null,
     typingUsers: {},
   });
 

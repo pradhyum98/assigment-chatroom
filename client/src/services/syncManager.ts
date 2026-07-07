@@ -188,37 +188,63 @@ class SyncManager {
   }
 
   async enqueueMessage(msgPayload: Omit<QueuedMessage, 'retryCount'>) {
-    const queuedItem: QueuedMessage = { ...msgPayload, retryCount: 0 };
+    const storeName = await localDb.getActiveQueueStoreName();
+    let queuedItem: any;
+
+    if (storeName === 'offline_queue_v2') {
+      let seq = 0;
+      try {
+        const seqMeta = await localDb.get('sync_meta', 'queue_seq');
+        seq = (seqMeta?.value || 0) + 1;
+      } catch {}
+      await localDb.put('sync_meta', { key: 'queue_seq', value: seq });
+
+      queuedItem = {
+        ...msgPayload,
+        queueId: msgPayload.clientMsgId || (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : Math.random().toString(36).substring(2)),
+        createdAt: Date.now(),
+        sequenceNumber: seq,
+        status: 'pending',
+        processingStartedAt: null,
+        leaseExpiresAt: null,
+        nextAttemptAt: Date.now(),
+        lastError: null,
+        retryCount: 0,
+        operationVersion: 1
+      };
+    } else {
+      queuedItem = { ...msgPayload, retryCount: 0 };
+    }
     
     // Save operation to IndexedDB
-    await localDb.put('offline_queue', queuedItem);
+    await localDb.put(storeName, queuedItem);
 
     // Apply optimistic updates immediately to the UI
-    if (queuedItem.actionType === 'react') {
+    if (msgPayload.actionType === 'react') {
       const state = store.getState();
-      const msgId = queuedItem.clientMsgId;
+      const msgId = msgPayload.clientMsgId;
       const targetMsg = state.chat.messages.find(m => m.messageId === msgId || m._id === msgId);
       if (targetMsg) {
         const reactions = targetMsg.reactions || [];
-        const index = reactions.findIndex((r: any) => r.userId === queuedItem.senderId && r.emoji === queuedItem.reactionEmoji);
+        const index = reactions.findIndex((r: any) => r.userId === msgPayload.senderId && r.emoji === msgPayload.reactionEmoji);
         let updatedReactions = [...reactions];
         if (index !== -1) {
           updatedReactions.splice(index, 1);
         } else {
-          updatedReactions.push({ emoji: queuedItem.reactionEmoji!, userId: queuedItem.senderId, createdAt: new Date().toISOString() });
+          updatedReactions.push({ emoji: msgPayload.reactionEmoji!, userId: msgPayload.senderId, createdAt: new Date().toISOString() });
         }
         store.dispatch(updateMessageReactions({ messageId: msgId, reactions: updatedReactions }));
       }
-    } else if (queuedItem.actionType === 'edit') {
+    } else if (msgPayload.actionType === 'edit') {
       store.dispatch(updateMessage({
-        messageId: queuedItem.clientMsgId,
-        content: queuedItem.content,
+        messageId: msgPayload.clientMsgId,
+        content: msgPayload.content,
         editedAt: new Date().toISOString()
       }));
-    } else if (queuedItem.actionType === 'delete') {
+    } else if (msgPayload.actionType === 'delete') {
       store.dispatch(deleteMessage({
-        messageId: queuedItem.clientMsgId,
-        deletedForEveryone: queuedItem.deleteForEveryone || false
+        messageId: msgPayload.clientMsgId,
+        deletedForEveryone: msgPayload.deleteForEveryone || false
       }));
     } else {
       const optimisticMsg = {
@@ -247,111 +273,240 @@ class SyncManager {
     this.isProcessingQueue = true;
 
     try {
-      let queue = await localDb.getAll('offline_queue');
+      const storeName = await localDb.getActiveQueueStoreName();
+      let queue = await localDb.getAll(storeName);
       
-      // Sort items to maintain FIFO order
-      // (Since clientMsgId is random, let's keep array order as read from IndexedDB)
-      while (queue.length > 0) {
-        if (!navigator.onLine || !socketService.connect()?.connected) {
-          console.log('[SyncManager] Browser is offline or socket disconnected, pausing queue.');
-          break;
+      if (storeName === 'offline_queue_v2') {
+        const now = Date.now();
+        // 1. Reclaim expired leases
+        for (const item of queue) {
+          if (item.status === 'processing' && item.leaseExpiresAt && item.leaseExpiresAt < now) {
+            item.status = 'pending';
+            item.processingStartedAt = null;
+            item.leaseExpiresAt = null;
+            await localDb.put(storeName, item);
+          }
         }
 
-        const item = queue[0];
-        console.log(`[SyncManager] Processing queue item: ${item.clientMsgId} (${item.actionType})`);
+        // 2. Filter and sort active queue items (pending or retry_wait)
+        const activeItems = queue.filter(item => 
+          (item.status === 'pending' || item.status === 'retry_wait') && 
+          item.nextAttemptAt <= now
+        );
 
-        try {
-          let ackResult: any;
+        activeItems.sort((a, b) => {
+          if (a.createdAt !== b.createdAt) {
+            return a.createdAt - b.createdAt;
+          }
+          return a.sequenceNumber - b.sequenceNumber;
+        });
 
-          if (item.actionType === 'react') {
-            socketService.reactToMessage({
-              messageId: item.clientMsgId,
-              roomId: item.roomId,
-              emoji: item.reactionEmoji!
-            });
-            ackResult = { ok: true };
-          } else if (item.actionType === 'edit') {
-            socketService.editMessage({
-              messageId: item.clientMsgId,
-              roomId: item.roomId,
-              content: item.content,
-              iv: item.iv
-            });
-            ackResult = { ok: true };
-          } else if (item.actionType === 'delete') {
-            socketService.deleteMessage({
-              messageId: item.clientMsgId,
-              roomId: item.roomId,
-              deleteForEveryone: item.deleteForEveryone || false
-            });
-            ackResult = { ok: true };
-          } else {
-            // Wait for structured ACK callback with a 10-second timeout
-            ackResult = await new Promise((resolve, reject) => {
-              const timeout = setTimeout(() => {
-                reject(new Error('ACK timeout'));
-              }, 10000);
-
-              socketService.sendMessage({
-                roomId: item.roomId,
-                senderId: item.senderId,
-                senderName: item.senderName,
-                content: item.content,
-                iv: item.iv,
-                clientMsgId: item.clientMsgId,
-                type: item.type,
-                mediaUrl: item.mediaUrl,
-                mediaFilename: item.mediaFilename,
-                mediaMimeType: item.mediaMimeType,
-                mediaSize: item.mediaSize,
-                mediaKey: item.mediaKey,
-                mediaIv: item.mediaIv,
-                replyTo: item.replyTo
-              }, (response: any) => {
-                clearTimeout(timeout);
-                resolve(response);
-              });
-            });
+        for (const item of activeItems) {
+          if (!navigator.onLine || !socketService.connect()?.connected) {
+            console.log('[SyncManager] Browser is offline or socket disconnected, pausing queue.');
+            break;
           }
 
-          if (ackResult && ackResult.ok) {
-            // Reconcile if it was a message send and server returned the persisted document
-            if (item.actionType === 'send' && ackResult.message) {
-              store.dispatch(reconcileConfirmedMessage({
-                clientMsgId: item.clientMsgId,
-                serverMessage: ackResult.message
-              }));
+          console.log(`[SyncManager] Processing queue item: ${item.queueId} (${item.actionType})`);
+
+          // Acquire lease
+          item.status = 'processing';
+          item.processingStartedAt = Date.now();
+          item.leaseExpiresAt = Date.now() + 30000;
+          await localDb.put(storeName, item);
+
+          try {
+            let ackResult: any;
+
+            if (item.actionType === 'react') {
+              socketService.reactToMessage({
+                messageId: item.clientMsgId,
+                roomId: item.roomId,
+                emoji: item.reactionEmoji!
+              });
+              ackResult = { ok: true };
+            } else if (item.actionType === 'edit') {
+              socketService.editMessage({
+                messageId: item.clientMsgId,
+                roomId: item.roomId,
+                content: item.content,
+                iv: item.iv
+              });
+              ackResult = { ok: true };
+            } else if (item.actionType === 'delete') {
+              socketService.deleteMessage({
+                messageId: item.clientMsgId,
+                roomId: item.roomId,
+                deleteForEveryone: item.deleteForEveryone || false
+              });
+              ackResult = { ok: true };
+            } else {
+              // Wait for structured ACK callback with a 10-second timeout
+              ackResult = await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                  reject(new Error('ACK timeout'));
+                }, 10000);
+
+                socketService.sendMessage({
+                  roomId: item.roomId,
+                  senderId: item.senderId,
+                  senderName: item.senderName,
+                  content: item.content,
+                  iv: item.iv,
+                  clientMsgId: item.clientMsgId,
+                  type: item.type,
+                  mediaUrl: item.mediaUrl,
+                  mediaFilename: item.mediaFilename,
+                  mediaMimeType: item.mediaMimeType,
+                  mediaSize: item.mediaSize,
+                  mediaKey: item.mediaKey,
+                  mediaIv: item.mediaIv,
+                  replyTo: item.replyTo
+                }, (response: any) => {
+                  clearTimeout(timeout);
+                  resolve(response);
+                });
+              });
             }
 
-            // Successfully processed. Remove from IndexedDB and memory queue.
-            await localDb.delete('offline_queue', item.clientMsgId);
-            queue.shift();
-          } else {
-            const errCode = ackResult?.errorCode || 'FAILED_ACK';
-            console.error(`[SyncManager] Queue item processing rejected: ${errCode}`);
+            if (ackResult && ackResult.ok) {
+              // Reconcile if it was a message send and server returned the persisted document
+              if (item.actionType === 'send' && ackResult.message) {
+                store.dispatch(reconcileConfirmedMessage({
+                  clientMsgId: item.clientMsgId,
+                  serverMessage: ackResult.message
+                }));
+              }
 
-            const isPermanent = ['NOT_MEMBER', 'FORBIDDEN', 'INVALID_PAYLOAD', 'TARGET_DELETED', 'CONFLICT_UNRESOLVABLE'].includes(errCode);
-            if (isPermanent) {
-              await localDb.delete('offline_queue', item.clientMsgId);
+              // Successfully processed. Remove from IndexedDB
+              await localDb.delete(storeName, item.queueId);
+            } else {
+              const errCode = ackResult?.errorCode || 'FAILED_ACK';
+              console.error(`[SyncManager] Queue item processing rejected: ${errCode}`);
+
+              const isPermanent = ['NOT_MEMBER', 'FORBIDDEN', 'INVALID_PAYLOAD', 'TARGET_DELETED', 'CONFLICT_UNRESOLVABLE'].includes(errCode);
+              if (isPermanent) {
+                item.status = 'failed_permanent';
+                item.lastError = errCode;
+                await localDb.put(storeName, item);
+              } else {
+                throw new Error(`Retryable socket ACK error: ${errCode}`);
+              }
+            }
+          } catch (err: any) {
+            console.error('[SyncManager] Failed to process queue item:', err);
+            item.retryCount++;
+            item.status = 'retry_wait';
+            item.lastError = err.message || String(err);
+            const backoff = Math.min(30000, 1000 * Math.pow(2, item.retryCount) * (0.5 + Math.random() * 0.5));
+            item.nextAttemptAt = Date.now() + backoff;
+            await localDb.put(storeName, item);
+          }
+        }
+      } else {
+        // v1 fallback
+        while (queue.length > 0) {
+          if (!navigator.onLine || !socketService.connect()?.connected) {
+            console.log('[SyncManager] Browser is offline or socket disconnected, pausing queue.');
+            break;
+          }
+
+          const item = queue[0];
+          console.log(`[SyncManager] Processing queue item: ${item.clientMsgId} (${item.actionType})`);
+
+          try {
+            let ackResult: any;
+
+            if (item.actionType === 'react') {
+              socketService.reactToMessage({
+                messageId: item.clientMsgId,
+                roomId: item.roomId,
+                emoji: item.reactionEmoji!
+              });
+              ackResult = { ok: true };
+            } else if (item.actionType === 'edit') {
+              socketService.editMessage({
+                messageId: item.clientMsgId,
+                roomId: item.roomId,
+                content: item.content,
+                iv: item.iv
+              });
+              ackResult = { ok: true };
+            } else if (item.actionType === 'delete') {
+              socketService.deleteMessage({
+                messageId: item.clientMsgId,
+                roomId: item.roomId,
+                deleteForEveryone: item.deleteForEveryone || false
+              });
+              ackResult = { ok: true };
+            } else {
+              // Wait for structured ACK callback with a 10-second timeout
+              ackResult = await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                  reject(new Error('ACK timeout'));
+                }, 10000);
+
+                socketService.sendMessage({
+                  roomId: item.roomId,
+                  senderId: item.senderId,
+                  senderName: item.senderName,
+                  content: item.content,
+                  iv: item.iv,
+                  clientMsgId: item.clientMsgId,
+                  type: item.type,
+                  mediaUrl: item.mediaUrl,
+                  mediaFilename: item.mediaFilename,
+                  mediaMimeType: item.mediaMimeType,
+                  mediaSize: item.mediaSize,
+                  mediaKey: item.mediaKey,
+                  mediaIv: item.mediaIv,
+                  replyTo: item.replyTo
+                }, (response: any) => {
+                  clearTimeout(timeout);
+                  resolve(response);
+                });
+              });
+            }
+
+            if (ackResult && ackResult.ok) {
+              // Reconcile if it was a message send and server returned the persisted document
+              if (item.actionType === 'send' && ackResult.message) {
+                store.dispatch(reconcileConfirmedMessage({
+                  clientMsgId: item.clientMsgId,
+                  serverMessage: ackResult.message
+                }));
+              }
+
+              // Successfully processed. Remove from IndexedDB and memory queue.
+              await localDb.delete(storeName, item.clientMsgId);
               queue.shift();
             } else {
-              throw new Error(`Retryable socket ACK error: ${errCode}`);
+              const errCode = ackResult?.errorCode || 'FAILED_ACK';
+              console.error(`[SyncManager] Queue item processing rejected: ${errCode}`);
+
+              const isPermanent = ['NOT_MEMBER', 'FORBIDDEN', 'INVALID_PAYLOAD', 'TARGET_DELETED', 'CONFLICT_UNRESOLVABLE'].includes(errCode);
+              if (isPermanent) {
+                await localDb.delete(storeName, item.clientMsgId);
+                queue.shift();
+              } else {
+                throw new Error(`Retryable socket ACK error: ${errCode}`);
+              }
             }
-          }
-        } catch (err) {
-          console.error('[SyncManager] Failed to process queue item:', err);
-          item.retryCount++;
-          
-          if (item.retryCount > 5) {
-            // Remove poison/failed operations after 5 attempts
-            await localDb.delete('offline_queue', item.clientMsgId);
-            queue.shift();
-          } else {
-            await localDb.put('offline_queue', item);
+          } catch (err) {
+            console.error('[SyncManager] Failed to process queue item:', err);
+            item.retryCount++;
             
-            // Wait with exponential backoff before the next check cycle
-            const backoff = Math.min(10000, 1000 * Math.pow(2, item.retryCount));
-            await new Promise(resolve => setTimeout(resolve, backoff));
+            if (item.retryCount > 5) {
+              // Remove poison/failed operations after 5 attempts
+              await localDb.delete(storeName, item.clientMsgId);
+              queue.shift();
+            } else {
+              await localDb.put(storeName, item);
+              
+              // Wait with exponential backoff before the next check cycle
+              const backoff = Math.min(10000, 1000 * Math.pow(2, item.retryCount));
+              await new Promise(resolve => setTimeout(resolve, backoff));
+            }
           }
         }
       }
