@@ -60,9 +60,9 @@ class SocketService {
     }
   }
 
-  sendMessage(data: any) {
+  sendMessage(data: any, callback?: (response: any) => void) {
     if (this.socket) {
-      this.socket.emit('send_message', data);
+      this.socket.emit('send_message', data, callback);
     }
   }
 

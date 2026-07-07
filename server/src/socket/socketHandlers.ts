@@ -1,5 +1,6 @@
 import { Server, Socket } from 'socket.io';
-import { v4 as uuidv4 } from 'uuid';
+import crypto from 'crypto';
+const uuidv4 = () => crypto.randomUUID();
 import mongoose from 'mongoose';
 import { z } from 'zod';
 import { Message } from '../models/Message';
@@ -16,21 +17,25 @@ const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[
 // ─── Zod schemas for incoming socket payloads ─────────────────────────────────
 
 const incomingMessageSchema = z.object({
-  roomId:        z.string().regex(uuidRegex, 'Invalid Room ID UUID format'),
-  senderId:      z.string().refine((id) => mongoose.Types.ObjectId.isValid(id), 'Invalid Sender ObjectId format'),
-  senderName:    z.string().min(1).max(100),
-  content:       z.string().max(10000, 'Message is too long (max 10000 chars)').optional().default(''),
-  iv:            z.string().optional(),
-  replyTo:       z.string().optional(), // ObjectId of message being replied to
-  clientMsgId:   z.string().optional(), // Client-side temporary ID for optimistic updates
-  type:          z.enum(['text', 'image', 'video', 'audio', 'file', 'voice']).optional().default('text'),
-  mediaUrl:      z.string().optional(),
-  mediaFilename: z.string().optional(),
-  mediaMimeType: z.string().optional(),
-  mediaSize:     z.number().optional(),
-  thumbnailUrl:  z.string().optional(),
-  mediaKey:      z.string().optional(),
-  mediaIv:       z.string().optional(),
+  roomId:            z.string().regex(uuidRegex, 'Invalid Room ID UUID format'),
+  senderId:          z.string().refine((id) => mongoose.Types.ObjectId.isValid(id), 'Invalid Sender ObjectId format'),
+  senderName:        z.string().min(1).max(100),
+  content:           z.string().max(10000, 'Message is too long (max 10000 chars)').optional().default(''),
+  iv:                z.string().optional(),
+  replyTo:           z.string().optional(), // ObjectId of message being replied to
+  clientMsgId:       z.string().regex(uuidRegex, 'Invalid clientMsgId UUID format'), // Required UUID
+  type:              z.enum(['text', 'image', 'video', 'audio', 'file', 'voice']).optional().default('text'),
+  mediaUrl:          z.string().optional(),
+  mediaFilename:     z.string().optional(),
+  mediaMimeType:     z.string().optional(),
+  mediaSize:         z.number().optional(),
+  thumbnailUrl:      z.string().optional(),
+  mediaKey:          z.string().optional(),
+  mediaIv:           z.string().optional(),
+  encryptionVersion: z.number().optional().default(1),
+  wrappedMediaKey:   z.string().optional(),
+  mediaKeyIv:        z.string().optional(),
+  roomKeyVersion:    z.number().optional(),
 }).refine((data) => {
   if (data.type === 'text' && (!data.content || data.content.trim().length === 0)) {
     return false;
@@ -204,11 +209,20 @@ export const setupSocketHandlers = (io: Server) => {
     });
 
     // ── send_message ─────────────────────────────────────────────────────────
-    socket.on('send_message', async (payload: any) => {
+    socket.on('send_message', async (payload: any, callback?: any) => {
       try {
         const { success, data, error } = incomingMessageSchema.safeParse(payload);
         if (!success) {
-          socket.emit('socket_error', { message: 'Invalid payload.' });
+          if (callback && typeof callback === 'function') {
+            callback({
+              ok: false,
+              clientMsgId: payload?.clientMsgId || '',
+              errorCode: 'INVALID_PAYLOAD',
+              retryable: false
+            });
+          } else {
+            socket.emit('socket_error', { message: 'Invalid payload.' });
+          }
           return;
         }
 
@@ -228,19 +242,41 @@ export const setupSocketHandlers = (io: Server) => {
           thumbnailUrl,
           mediaKey,
           mediaIv,
+          encryptionVersion,
+          wrappedMediaKey,
+          mediaKeyIv,
+          roomKeyVersion,
         } = data;
 
         const room = await getRoomAndVerifyMembership(roomId, userId);
         if (!room) {
           auditLog.authorizationFailure(user.email, 'send_message', roomId);
-          socket.emit('socket_error', { message: 'Room not found.' });
+          if (callback && typeof callback === 'function') {
+            callback({
+              ok: false,
+              clientMsgId,
+              errorCode: 'NOT_MEMBER',
+              retryable: false
+            });
+          } else {
+            socket.emit('socket_error', { message: 'Room not found.' });
+          }
           return;
         }
 
         // Prevent sender-ID spoofing
         if (senderId !== userId) {
           auditLog.authorizationFailure(user.email, 'send_message_spoof', roomId);
-          socket.emit('socket_error', { message: 'Action not allowed.' });
+          if (callback && typeof callback === 'function') {
+            callback({
+              ok: false,
+              clientMsgId,
+              errorCode: 'FORBIDDEN',
+              retryable: false
+            });
+          } else {
+            socket.emit('socket_error', { message: 'Action not allowed.' });
+          }
           return;
         }
 
@@ -261,28 +297,54 @@ export const setupSocketHandlers = (io: Server) => {
           }
         }
 
-        // Persist message
-        const message = await Message.create({
-          messageId:   uuidv4(),
-          senderId,
-          senderName,
-          roomId,
-          type,
-          content:     sanitizedContent,
-          iv,
-          timestamp:   new Date(),
-          replyTo:     replyToId,
-          reactions:   [],
-          deliveredTo: [],
-          readBy:      [],
-          mediaUrl,
-          mediaFilename,
-          mediaMimeType,
-          mediaSize,
-          thumbnailUrl,
-          mediaKey,
-          mediaIv,
-        });
+        // Persist message using insert-first strategy to prevent race-condition duplicates
+        let message;
+        try {
+          message = await Message.create({
+            messageId:   uuidv4(),
+            senderId,
+            senderName,
+            roomId,
+            type,
+            content:     sanitizedContent,
+            iv,
+            timestamp:   new Date(),
+            replyTo:     replyToId,
+            reactions:   [],
+            deliveredTo: [],
+            readBy:      [],
+            mediaUrl,
+            mediaFilename,
+            mediaMimeType,
+            mediaSize,
+            thumbnailUrl,
+            mediaKey,
+            mediaIv,
+            clientMsgId,
+            encryptionVersion,
+            wrappedMediaKey,
+            mediaKeyIv,
+            roomKeyVersion,
+            roomSequenceNumber: 1, // Placeholder, fully integrated in sync events (Phase 9)
+          });
+        } catch (err: any) {
+          // Check for unique key duplicate error
+          if (err.code === 11000) {
+            const existingMessage = await Message.findOne({ senderId, clientMsgId })
+              .populate('replyTo', 'messageId senderId senderName content type timestamp');
+            if (existingMessage) {
+              if (callback && typeof callback === 'function') {
+                callback({
+                  ok: true,
+                  clientMsgId,
+                  message: existingMessage.toObject()
+                });
+              }
+              return;
+            }
+          }
+          throw err;
+        }
 
         // Populate replyTo for broadcast
         const populated = await message.populate('replyTo', 'messageId senderId senderName content type');
@@ -327,8 +389,25 @@ export const setupSocketHandlers = (io: Server) => {
             .catch((err) => logger.error('Failed to increment unread counts:', err));
         }
 
+        // Acknowledge persistence success to the client
+        if (callback && typeof callback === 'function') {
+          callback({
+            ok: true,
+            clientMsgId,
+            message: populated.toObject()
+          });
+        }
+
       } catch (err) {
         logger.error('Failed to process socket message:', err);
+        if (callback && typeof callback === 'function') {
+          callback({
+            ok: false,
+            clientMsgId: payload?.clientMsgId || '',
+            errorCode: 'SERVER_ERROR',
+            retryable: true
+          });
+        }
       }
     });
 

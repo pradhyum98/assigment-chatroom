@@ -59,6 +59,14 @@ export interface MessageDoc extends Document {
   // Delivery / read status
   deliveredTo: DeliveryReceipt[];
   readBy: ReadReceipt[];
+
+  // Pre-mobile foundation fields
+  clientMsgId?: string;
+  encryptionVersion?: number;
+  wrappedMediaKey?: string;
+  mediaKeyIv?: string;
+  roomKeyVersion?: number;
+  roomSequenceNumber?: number;
 }
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
@@ -174,6 +182,12 @@ const MessageSchema = new Schema<MessageDoc>(
       type: [ReadReceiptSchema],
       default: [],
     },
+    clientMsgId: { type: String, default: undefined },
+    encryptionVersion: { type: Number, default: undefined },
+    wrappedMediaKey: { type: String, default: undefined },
+    mediaKeyIv: { type: String, default: undefined },
+    roomKeyVersion: { type: Number, default: undefined },
+    roomSequenceNumber: { type: Number, default: undefined },
   },
   {
     timestamps: false,
@@ -181,6 +195,15 @@ const MessageSchema = new Schema<MessageDoc>(
 );
 
 // ─── Indexes ──────────────────────────────────────────────────────────────────
+
+// Compound unique index for clientMsgId idempotency (only active when clientMsgId exists)
+MessageSchema.index(
+  { senderId: 1, clientMsgId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { clientMsgId: { $exists: true } }
+  }
+);
 
 // Compound index for deterministic incremental sinceId sync
 MessageSchema.index({ roomId: 1, _id: 1 });

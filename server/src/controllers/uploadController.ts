@@ -2,7 +2,8 @@ import { Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import { v4 as uuidv4 } from 'uuid';
+import crypto from 'crypto';
+const uuidv4 = () => crypto.randomUUID();
 import { AppError } from '../middleware/errorHandler';
 import { v2 as cloudinary } from 'cloudinary';
 

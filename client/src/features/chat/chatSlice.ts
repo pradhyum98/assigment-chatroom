@@ -126,6 +126,41 @@ const chatSlice = createSlice({
     clearTyping: (state) => {
       state.typingUsers = {};
     },
+    upsertMessage: (state, action: PayloadAction<Message>) => {
+      const newMsg = action.payload;
+      const idx = state.messages.findIndex(m => 
+        (newMsg._id && m._id === newMsg._id) || 
+        (newMsg.messageId && m.messageId === newMsg.messageId) ||
+        (newMsg.clientMsgId && m.clientMsgId === newMsg.clientMsgId)
+      );
+      if (idx !== -1) {
+        state.messages[idx] = {
+          ...state.messages[idx],
+          ...newMsg,
+          isOptimistic: newMsg.isOptimistic ?? state.messages[idx].isOptimistic
+        };
+      } else {
+        state.messages.push(newMsg);
+      }
+    },
+    reconcileConfirmedMessage: (state, action: PayloadAction<{ clientMsgId: string; serverMessage: Message }>) => {
+      const idx = state.messages.findIndex(m => m.clientMsgId === action.payload.clientMsgId);
+      if (idx !== -1) {
+        state.messages[idx] = {
+          ...action.payload.serverMessage,
+          isOptimistic: false
+        };
+      } else {
+        const serverMsg = action.payload.serverMessage;
+        const exists = state.messages.some(m => m._id === serverMsg._id || m.messageId === serverMsg.messageId);
+        if (!exists) {
+          state.messages.push({
+            ...serverMsg,
+            isOptimistic: false
+          });
+        }
+      }
+    },
     confirmMessageSent: (state, action: PayloadAction<{ clientMsgId: string; serverMessage: Message }>) => {
       const idx = state.messages.findIndex(m => m.clientMsgId === action.payload.clientMsgId);
       if (idx !== -1) {
@@ -138,6 +173,10 @@ const chatSlice = createSlice({
 export const { 
   setMessages, addMessage, setLoading, setError, clearMessages,
   updateMessage, deleteMessage, updateMessageReactions, updateMessageReceipts,
-  setTyping, clearTyping, confirmMessageSent
+  setTyping, clearTyping, confirmMessageSent, upsertMessage, reconcileConfirmedMessage
 } = chatSlice.actions;
+
+export const selectMessageExists = (messages: Message[], id: string): boolean => 
+  messages.some(m => m._id === id || m.messageId === id || m.clientMsgId === id);
+
 export default chatSlice.reducer;

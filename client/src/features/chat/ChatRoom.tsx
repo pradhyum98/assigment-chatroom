@@ -4,7 +4,7 @@ import ChatWindow from './ChatWindow';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { socketService } from '../../services/socket';
 import { 
-  addMessage, 
+  upsertMessage, 
   updateMessage, 
   deleteMessage, 
   updateMessageReactions, 
@@ -150,7 +150,7 @@ const ChatRoom: React.FC = () => {
       }));
 
       if (currentRoom && message.roomId === currentRoom.roomId) {
-        dispatch(addMessage({ ...message, content, decryptedMediaUrl }));
+        dispatch(upsertMessage({ ...message, content, decryptedMediaUrl }));
       }
     };
 

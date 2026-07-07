@@ -5,7 +5,8 @@ import { setRooms, setCurrentRoom } from '../features/rooms/roomsSlice';
 import { setFriends, setPendingRequests } from '../features/friends/friendsSlice';
 import { 
   setMessages, 
-  addMessage, 
+  upsertMessage, 
+  reconcileConfirmedMessage,
   updateMessage, 
   deleteMessage, 
   updateMessageReactions 
@@ -171,7 +172,7 @@ class SyncManager {
             );
             
             decryptedNewMsgs.forEach(msg => {
-              store.dispatch(addMessage(msg));
+              store.dispatch(upsertMessage(msg));
             });
           }
         }
@@ -220,7 +221,6 @@ class SyncManager {
         deletedForEveryone: queuedItem.deleteForEveryone || false
       }));
     } else {
-      // Normal send
       const optimisticMsg = {
         messageId: queuedItem.clientMsgId,
         clientMsgId: queuedItem.clientMsgId,
@@ -235,7 +235,7 @@ class SyncManager {
         replyTo: queuedItem.replyTo,
         isOptimistic: true
       } as any;
-      store.dispatch(addMessage(optimisticMsg));
+      store.dispatch(upsertMessage(optimisticMsg));
     }
 
     // Process the queue asynchronously
@@ -261,12 +261,15 @@ class SyncManager {
         console.log(`[SyncManager] Processing queue item: ${item.clientMsgId} (${item.actionType})`);
 
         try {
+          let ackResult: any;
+
           if (item.actionType === 'react') {
             socketService.reactToMessage({
               messageId: item.clientMsgId,
               roomId: item.roomId,
               emoji: item.reactionEmoji!
             });
+            ackResult = { ok: true };
           } else if (item.actionType === 'edit') {
             socketService.editMessage({
               messageId: item.clientMsgId,
@@ -274,34 +277,67 @@ class SyncManager {
               content: item.content,
               iv: item.iv
             });
+            ackResult = { ok: true };
           } else if (item.actionType === 'delete') {
             socketService.deleteMessage({
               messageId: item.clientMsgId,
               roomId: item.roomId,
               deleteForEveryone: item.deleteForEveryone || false
             });
+            ackResult = { ok: true };
           } else {
-            socketService.sendMessage({
-              roomId: item.roomId,
-              senderId: item.senderId,
-              senderName: item.senderName,
-              content: item.content,
-              iv: item.iv,
-              clientMsgId: item.clientMsgId,
-              type: item.type,
-              mediaUrl: item.mediaUrl,
-              mediaFilename: item.mediaFilename,
-              mediaMimeType: item.mediaMimeType,
-              mediaSize: item.mediaSize,
-              mediaKey: item.mediaKey,
-              mediaIv: item.mediaIv,
-              replyTo: item.replyTo
+            // Wait for structured ACK callback with a 10-second timeout
+            ackResult = await new Promise((resolve, reject) => {
+              const timeout = setTimeout(() => {
+                reject(new Error('ACK timeout'));
+              }, 10000);
+
+              socketService.sendMessage({
+                roomId: item.roomId,
+                senderId: item.senderId,
+                senderName: item.senderName,
+                content: item.content,
+                iv: item.iv,
+                clientMsgId: item.clientMsgId,
+                type: item.type,
+                mediaUrl: item.mediaUrl,
+                mediaFilename: item.mediaFilename,
+                mediaMimeType: item.mediaMimeType,
+                mediaSize: item.mediaSize,
+                mediaKey: item.mediaKey,
+                mediaIv: item.mediaIv,
+                replyTo: item.replyTo
+              }, (response: any) => {
+                clearTimeout(timeout);
+                resolve(response);
+              });
             });
           }
 
-          // Successfully processed. Remove from IndexedDB and memory queue.
-          await localDb.delete('offline_queue', item.clientMsgId);
-          queue.shift();
+          if (ackResult && ackResult.ok) {
+            // Reconcile if it was a message send and server returned the persisted document
+            if (item.actionType === 'send' && ackResult.message) {
+              store.dispatch(reconcileConfirmedMessage({
+                clientMsgId: item.clientMsgId,
+                serverMessage: ackResult.message
+              }));
+            }
+
+            // Successfully processed. Remove from IndexedDB and memory queue.
+            await localDb.delete('offline_queue', item.clientMsgId);
+            queue.shift();
+          } else {
+            const errCode = ackResult?.errorCode || 'FAILED_ACK';
+            console.error(`[SyncManager] Queue item processing rejected: ${errCode}`);
+
+            const isPermanent = ['NOT_MEMBER', 'FORBIDDEN', 'INVALID_PAYLOAD', 'TARGET_DELETED', 'CONFLICT_UNRESOLVABLE'].includes(errCode);
+            if (isPermanent) {
+              await localDb.delete('offline_queue', item.clientMsgId);
+              queue.shift();
+            } else {
+              throw new Error(`Retryable socket ACK error: ${errCode}`);
+            }
+          }
         } catch (err) {
           console.error('[SyncManager] Failed to process queue item:', err);
           item.retryCount++;
