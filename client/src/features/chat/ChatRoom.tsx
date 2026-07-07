@@ -120,7 +120,11 @@ const ChatRoom: React.FC = () => {
       }
 
       let decryptedMediaUrl = undefined;
-      if (message.type !== 'text' && message.mediaUrl && message.mediaKey && message.mediaIv) {
+      const hasMedia = message.type !== 'text' && message.mediaUrl && 
+        ((message.encryptionVersion === 2 && message.wrappedMediaKey && message.mediaKeyIv && message.mediaIv) || 
+         (message.mediaKey && message.mediaIv));
+
+      if (hasMedia) {
         try {
           const serverUrl = import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace(/\/api$/, '') : 'http://localhost:5001';
           const token = localStorage.getItem('token');
@@ -129,12 +133,34 @@ const ChatRoom: React.FC = () => {
           const fileRes = await fetch(fileUrl);
           const encryptedBlob = await fileRes.blob();
           const { CryptoService } = await import('../../services/cryptoService');
-          decryptedMediaUrl = await CryptoService.decryptFile(
-            encryptedBlob,
-            message.mediaKey,
-            message.mediaIv,
-            message.mediaMimeType || 'application/octet-stream'
-          );
+
+          let fileKey: any;
+          if (message.encryptionVersion === 2 && currentRoom) {
+            const roomKey = await getRoomKey(currentRoom.roomId, currentRoom.encryptedRoomKeys);
+            if (roomKey) {
+              fileKey = await CryptoService.unwrapMediaKey(
+                message.wrappedMediaKey,
+                message.mediaKeyIv,
+                roomKey,
+                {
+                  roomId: currentRoom.roomId,
+                  clientMsgId: message.clientMsgId,
+                  encryptionVersion: 2
+                }
+              );
+            }
+          } else {
+            fileKey = message.mediaKey;
+          }
+
+          if (fileKey) {
+            decryptedMediaUrl = await CryptoService.decryptFile(
+              encryptedBlob,
+              fileKey,
+              message.mediaIv || message.mediaKeyIv,
+              message.mediaMimeType || 'application/octet-stream'
+            );
+          }
         } catch (e) {
           console.error('Failed to decrypt incoming media', e);
         }

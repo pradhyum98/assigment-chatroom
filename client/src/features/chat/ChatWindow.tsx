@@ -250,23 +250,43 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
               }
             }
             
-            if (msg.type !== 'text' && msg.mediaUrl && msg.mediaKey && msg.mediaIv) {
+            const hasMedia = msg.type !== 'text' && msg.mediaUrl && 
+              ((msg.encryptionVersion === 2 && msg.wrappedMediaKey && msg.mediaKeyIv && msg.mediaIv) || 
+               (msg.mediaKey && msg.mediaIv));
+
+            if (hasMedia) {
               try {
-                // Fetch the encrypted file
                 const fileRes = await fetch(getMediaUrl(msg.mediaUrl));
                 const encryptedBlob = await fileRes.blob();
-                 const objectUrl = await CryptoService.decryptFile(
-                   encryptedBlob,
-                   msg.mediaKey,
-                   msg.mediaIv,
-                   msg.mediaMimeType || 'application/octet-stream'
-                 );
-                 createdObjectUrlsRef.current.push(objectUrl);
-                 processedMsg.decryptedMediaUrl = objectUrl;
-               } catch (e) {
-                 console.error('Failed to decrypt media', msg.messageId, e);
-               }
-             }
+                
+                let fileKey: any;
+                if (msg.encryptionVersion === 2) {
+                  fileKey = await CryptoService.unwrapMediaKey(
+                    msg.wrappedMediaKey,
+                    msg.mediaKeyIv,
+                    roomKey,
+                    {
+                      roomId: currentRoom.roomId,
+                      clientMsgId: msg.clientMsgId,
+                      encryptionVersion: 2
+                    }
+                  );
+                } else {
+                  fileKey = msg.mediaKey;
+                }
+
+                const objectUrl = await CryptoService.decryptFile(
+                  encryptedBlob,
+                  fileKey,
+                  msg.mediaIv || msg.mediaKeyIv,
+                  msg.mediaMimeType || 'application/octet-stream'
+                );
+                createdObjectUrlsRef.current.push(objectUrl);
+                processedMsg.decryptedMediaUrl = objectUrl;
+              } catch (e) {
+                console.error('Failed to decrypt media', msg.messageId, e);
+              }
+            }
 
             return processedMsg;
           }));
@@ -346,22 +366,43 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
               msg.content = '[Decryption Failed]';
             }
           }
-          if (msg.type !== 'text' && msg.mediaUrl && msg.mediaKey && msg.mediaIv) {
+          const hasMedia = msg.type !== 'text' && msg.mediaUrl && 
+            ((msg.encryptionVersion === 2 && msg.wrappedMediaKey && msg.mediaKeyIv && msg.mediaIv) || 
+             (msg.mediaKey && msg.mediaIv));
+
+          if (hasMedia) {
             try {
               const fileRes = await fetch(getMediaUrl(msg.mediaUrl));
               const encryptedBlob = await fileRes.blob();
-               const objectUrl = await CryptoService.decryptFile(
-                 encryptedBlob,
-                 msg.mediaKey,
-                 msg.mediaIv,
-                 msg.mediaMimeType || 'application/octet-stream'
-               );
-               createdObjectUrlsRef.current.push(objectUrl);
-               msg.decryptedMediaUrl = objectUrl;
-             } catch (e) {
-               console.error('Failed to decrypt media', msg.messageId, e);
-             }
-           }
+              
+              let fileKey: any;
+              if (msg.encryptionVersion === 2) {
+                fileKey = await CryptoService.unwrapMediaKey(
+                  msg.wrappedMediaKey,
+                  msg.mediaKeyIv,
+                  roomKey,
+                  {
+                    roomId: currentRoom.roomId,
+                    clientMsgId: msg.clientMsgId,
+                    encryptionVersion: 2
+                  }
+                );
+              } else {
+                fileKey = msg.mediaKey;
+              }
+
+              const objectUrl = await CryptoService.decryptFile(
+                encryptedBlob,
+                fileKey,
+                msg.mediaIv || msg.mediaKeyIv,
+                msg.mediaMimeType || 'application/octet-stream'
+              );
+              createdObjectUrlsRef.current.push(objectUrl);
+              msg.decryptedMediaUrl = objectUrl;
+            } catch (e) {
+              console.error('Failed to decrypt media', msg.messageId, e);
+            }
+          }
 
           return msg;
         }));
@@ -558,13 +599,17 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
     try {
       let mediaData: { url: string; filename: string; mimetype: string; size: number; type: 'image' | 'video' | 'audio' | 'file' } | null = null;
 
-      let mediaKeyToSend: string | undefined = undefined;
+      let mediaKeyIvToSend: string | undefined = undefined;
+      let wrappedMediaKeyToSend: string | undefined = undefined;
       let mediaIvToSend: string | undefined = undefined;
+      let encryptionVersionToSend: number | undefined = undefined;
+
+      const clientMsgId = globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : Math.random().toString(36).substring(7);
 
       if (selectedFile) {
         setIsUploading(true);
         // Encrypt the file before uploading
-        const { encryptedBlob, fileKeyBase64, ivBase64 } = await CryptoService.encryptFile(selectedFile);
+        const { encryptedBlob, fileKey, ivBase64 } = await CryptoService.encryptFile(selectedFile);
         
         // Convert Blob to File to upload
         const encryptedFileToUpload = new (window as any).File([encryptedBlob], selectedFile.name, { type: 'application/octet-stream' }) as File;
@@ -579,8 +624,20 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
         
         mediaData.mimetype = selectedFile.type;
 
-        mediaKeyToSend = fileKeyBase64;
+        // Wrap media key using room key and context binding
+        const roomKey = await getRoomKey(currentRoom.roomId, currentRoom.encryptedRoomKeys);
+        if (!roomKey) throw new Error('Cannot send media without room key');
+        
+        const { wrappedKey, wrapIv } = await CryptoService.wrapMediaKey(fileKey, roomKey, {
+          roomId: currentRoom.roomId,
+          clientMsgId,
+          encryptionVersion: 2
+        });
+
+        wrappedMediaKeyToSend = wrappedKey;
+        mediaKeyIvToSend = wrapIv;
         mediaIvToSend = ivBase64;
+        encryptionVersionToSend = 2;
 
         cancelFileSelection();
       }
@@ -606,7 +663,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
         senderName: `${user.firstName} ${user.lastName}`,
         content: contentToSend,
         iv: ivToSend,
-        clientMsgId: Math.random().toString(36).substring(7),
+        clientMsgId,
         replyTo: replyingTo ? (replyingTo.messageId || replyingTo._id) : undefined,
         actionType: 'send' as const,
         ...(mediaData ? {
@@ -615,7 +672,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
           mediaFilename: mediaData.filename,
           mediaMimeType: mediaData.mimetype,
           mediaSize: mediaData.size,
-          mediaKey: mediaKeyToSend,
+          encryptionVersion: encryptionVersionToSend,
+          wrappedMediaKey: wrappedMediaKeyToSend,
+          mediaKeyIv: mediaKeyIvToSend,
           mediaIv: mediaIvToSend,
         } : {
           type: 'text'
@@ -641,26 +700,38 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
     setIsUploading(true);
 
     try {
+      const clientMsgId = globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : Math.random().toString(36).substring(7);
       // Encrypt the file before uploading
       const file = new (window as any).File([audioBlob], 'voice-message.webm', { type: 'audio/webm' }) as File;
-      const { encryptedBlob, fileKeyBase64, ivBase64 } = await CryptoService.encryptFile(file);
+      const { encryptedBlob, fileKey, ivBase64 } = await CryptoService.encryptFile(file);
       
       const encryptedFileToUpload = new (window as any).File([encryptedBlob], 'voice-message.webm', { type: 'application/octet-stream' }) as File;
       const uploadResult = await UploadService.uploadFileResumable(encryptedFileToUpload);
       const mediaData = uploadResult.data;
+
+      // Wrap media key
+      const roomKey = await getRoomKey(currentRoom.roomId, currentRoom.encryptedRoomKeys);
+      if (!roomKey) throw new Error('Cannot send media without room key');
+      const { wrappedKey, wrapIv } = await CryptoService.wrapMediaKey(fileKey, roomKey, {
+        roomId: currentRoom.roomId,
+        clientMsgId,
+        encryptionVersion: 2
+      });
 
       const messageData = {
         roomId: currentRoom.roomId,
         senderId: user._id,
         senderName: `${user.firstName} ${user.lastName}`,
         content: '',
-        clientMsgId: Math.random().toString(36).substring(7),
+        clientMsgId,
         type: 'audio', // Treat voice notes as audio for playback UI
         mediaUrl: mediaData.url,
         mediaFilename: mediaData.filename,
         mediaMimeType: 'audio/webm',
         mediaSize: mediaData.size,
-        mediaKey: fileKeyBase64,
+        encryptionVersion: 2,
+        wrappedMediaKey: wrappedKey,
+        mediaKeyIv: wrapIv,
         mediaIv: ivBase64,
         actionType: 'send' as const
       };
