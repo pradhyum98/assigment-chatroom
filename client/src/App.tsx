@@ -28,6 +28,12 @@ const ProtectedRoute: React.FC<{ children: React.ReactElement }> = ({ children }
 const App: React.FC = () => {
   const dispatch = useAppDispatch();
   const { token } = useAppSelector((state) => state.auth);
+  const currentRoom = useAppSelector((state) => state.rooms.currentRoom);
+  const currentRoomRef = React.useRef(currentRoom);
+
+  useEffect(() => {
+    currentRoomRef.current = currentRoom;
+  }, [currentRoom]);
 
   // Clean up any legacy plaintext keys from localStorage on startup
   useEffect(() => {
@@ -53,7 +59,13 @@ const App: React.FC = () => {
       listenerPromise = CapApp.addListener('backButton', (data) => {
         const path = window.location.pathname;
         if (path === '/' || path === '/login' || path === '/signup' || !data.canGoBack) {
-          CapApp.exitApp();
+          if (path === '/' && currentRoomRef.current) {
+            import('./features/rooms/roomsSlice').then(({ setCurrentRoom }) => {
+              dispatch(setCurrentRoom(null));
+            });
+          } else {
+            CapApp.exitApp();
+          }
         } else {
           window.history.back();
         }

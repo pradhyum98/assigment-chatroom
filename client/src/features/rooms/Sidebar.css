@@ -667,4 +667,17 @@
   color: var(--text-muted);
 }
 
+.friend-inline-row .room-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.friend-inline-row .room-preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 
