@@ -51,7 +51,7 @@ export const setRefreshTokenCookie = (req: Request, res: Response, token: string
 
   res.cookie('refreshToken', token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: isCapacitor ? false : (process.env.NODE_ENV === 'production'),
     sameSite: isCapacitor ? 'lax' : 'strict',
     path: '/api/auth',
     maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days in ms
@@ -64,7 +64,7 @@ export const clearRefreshTokenCookie = (req: Request, res: Response) => {
 
   res.clearCookie('refreshToken', {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: isCapacitor ? false : (process.env.NODE_ENV === 'production'),
     sameSite: isCapacitor ? 'lax' : 'strict',
     path: '/api/auth'
   });
