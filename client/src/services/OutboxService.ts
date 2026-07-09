@@ -1,6 +1,7 @@
 import { CanonicalDatabase } from './CanonicalDatabase';
 import { store } from '../store';
 import { updateOptimisticMutationStatus, removeOptimisticMutation } from '../features/chat/chatSlice';
+import { socketService } from './socket';
 
 export type OutboxStatus = 
   | 'PENDING' 
@@ -124,14 +125,90 @@ export class OutboxService {
     await this.updateStatus(item.mutationId, 'SENDING');
     
     try {
-      // Fake network send
-      // await api.post('/some/endpoint', item.payload);
-      
+      // Real network send via Socket.IO
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('TIMEOUT')), 10000);
+
+        const handleAck = (ack: any) => {
+          clearTimeout(timeout);
+          if (ack && ack.ok === false) {
+            if (ack.retryable === false) {
+              reject(new Error('PERMANENT_REJECT'));
+            } else {
+              reject(new Error('RETRY'));
+            }
+          } else {
+            resolve();
+          }
+        };
+
+        switch (item.actionType) {
+          case 'SEND_MESSAGE':
+            socketService.sendMessage({
+              clientMsgId: item.clientMsgId,
+              roomId: item.roomId,
+              senderId: item.payload.senderId,
+              senderName: item.payload.senderName,
+              content: item.payload.content,
+              iv: item.payload.iv,
+              type: item.payload.type || 'text',
+              timestamp: item.payload.timestamp,
+              replyTo: item.payload.replyTo,
+              mediaUrl: item.payload.mediaUrl,
+              mediaFilename: item.payload.mediaFilename,
+              mediaMimeType: item.payload.mediaMimeType,
+              mediaSize: item.payload.mediaSize,
+              encryptionVersion: item.payload.encryptionVersion,
+              wrappedMediaKey: item.payload.wrappedMediaKey,
+              mediaKeyIv: item.payload.mediaKeyIv,
+              mediaIv: item.payload.mediaIv,
+            }, handleAck);
+            break;
+          case 'EDIT_MESSAGE':
+            socketService.editMessage({
+              messageId: item.payload.messageId,
+              roomId: item.roomId,
+              content: item.payload.content,
+              iv: item.payload.iv,
+            });
+            clearTimeout(timeout);
+            resolve();
+            break;
+          case 'DELETE_MESSAGE':
+            socketService.deleteMessage({
+              messageId: item.payload.messageId,
+              roomId: item.roomId,
+              deleteForEveryone: item.payload.deletedForEveryone,
+            });
+            clearTimeout(timeout);
+            resolve();
+            break;
+          case 'ADD_REACTION':
+          case 'REMOVE_REACTION':
+            socketService.reactToMessage({
+              messageId: item.payload.messageId,
+              roomId: item.roomId,
+              emoji: item.payload.emoji,
+            });
+            clearTimeout(timeout);
+            resolve();
+            break;
+          default:
+            // Unknown action — treat as acknowledged so we don't block the queue
+            clearTimeout(timeout);
+            resolve();
+        }
+      });
+
       // 4. ACKNOWLEDGED
       await this.updateStatus(item.mutationId, 'ACKNOWLEDGED');
       
     } catch (networkError: any) {
-      // 5. RETRYABLE_FAILURE
+      if (networkError?.message === 'PERMANENT_REJECT') {
+        await this.updateStatus(item.mutationId, 'PERMANENTLY_REJECTED');
+        return; // Don't block the room for permanent failures
+      }
+      // 5. RETRYABLE_FAILURE (TIMEOUT, RETRY, or unknown)
       item.attemptCount++;
       item.nextAttemptAt = Date.now() + Math.min(1000 * Math.pow(2, item.attemptCount), 60000);
       item.status = 'RETRYABLE_FAILURE';
