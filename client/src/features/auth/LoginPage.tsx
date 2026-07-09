@@ -13,7 +13,13 @@ const LoginPage: React.FC = () => {
   const [resetLoading, setResetLoading] = useState(false);
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
-  const { loading, error } = useAppSelector((state) => state.auth);
+  const { loading, error, isAuthenticated } = useAppSelector((state) => state.auth);
+
+  React.useEffect(() => {
+    if (isAuthenticated) {
+      navigate('/', { replace: true });
+    }
+  }, [isAuthenticated, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -57,7 +63,7 @@ const LoginPage: React.FC = () => {
       secretStore.setPrivateKey(importedPrivKey);
 
       dispatch(loginSuccess(response.data.data));
-      navigate('/');
+      navigate('/', { replace: true });
     } catch (err: any) {
       dispatch(loginFailure(err.response?.data?.message || 'Login failed'));
     }
@@ -97,7 +103,7 @@ const LoginPage: React.FC = () => {
 
       dispatch(loginSuccess(response.data.data));
       setShowIdentityReset(false);
-      navigate('/');
+      navigate('/', { replace: true });
     } catch (err: any) {
       dispatch(loginFailure(err.response?.data?.message || 'Failed to reset identity'));
     } finally {

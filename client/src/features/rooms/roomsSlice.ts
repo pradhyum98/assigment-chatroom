@@ -86,7 +86,10 @@ const roomsSlice = createSlice({
       state.currentRoom = action.payload;
     },
     addRoom: (state, action: PayloadAction<Room>) => {
-      state.rooms.unshift(action.payload);
+      const exists = state.rooms.some(r => r.roomId === action.payload.roomId);
+      if (!exists) {
+        state.rooms.unshift(action.payload);
+      }
     },
     clearRooms: (state) => {
       state.rooms = [];

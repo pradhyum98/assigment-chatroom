@@ -5,7 +5,7 @@ import { logout, loginSuccess } from '../features/auth/authSlice';
 import { TransportConfig } from '../config/TransportConfig';
 
 const isNative = TransportConfig.runtimePlatform !== 'web';
-const API_URL = TransportConfig.apiOrigin;
+const API_URL = TransportConfig.apiOrigin.endsWith('/api') ? TransportConfig.apiOrigin : `${TransportConfig.apiOrigin}/api`;
 
 console.log('[API Service] Initializing, isNative:', isNative, 'URL:', API_URL);
 

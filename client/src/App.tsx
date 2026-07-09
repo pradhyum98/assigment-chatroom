@@ -45,8 +45,30 @@ const App: React.FC = () => {
     cleanLegacyKeys();
   }, []);
 
-// Keep a module-level promise to deduplicate concurrent bootstrap requests (e.g. from React StrictMode double mounts)
-let bootstrapPromise: Promise<void> | null = null;
+  // Listen to native Android Back Button to prevent accidental logouts
+  useEffect(() => {
+    let listenerPromise: Promise<any> | null = null;
+    
+    import('@capacitor/app').then(({ App: CapApp }) => {
+      listenerPromise = CapApp.addListener('backButton', (data) => {
+        const path = window.location.pathname;
+        if (path === '/' || path === '/login' || path === '/signup' || !data.canGoBack) {
+          CapApp.exitApp();
+        } else {
+          window.history.back();
+        }
+      });
+    });
+
+    return () => {
+      if (listenerPromise) {
+        listenerPromise.then((l) => l.remove());
+      }
+    };
+  }, []);
+
+  // Keep a module-level promise to deduplicate concurrent bootstrap requests (e.g. from React StrictMode double mounts)
+  let bootstrapPromise: Promise<void> | null = null;
 
   // Bootstrap session via silent refresh on initial mount
   useEffect(() => {

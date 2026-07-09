@@ -628,9 +628,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
                         <X size={15} />
                       </button>
                     </div>
-                  ) : (
-                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Pending</span>
-                  )}
+                  ) : null}
                 </div>
               );
             })
