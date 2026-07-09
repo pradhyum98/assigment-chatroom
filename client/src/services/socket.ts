@@ -1,7 +1,9 @@
 import { io, Socket } from 'socket.io-client';
 import { getAccessToken } from './api';
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:5001';
+import { TransportConfig } from '../config/TransportConfig';
+
+const SOCKET_URL = TransportConfig.socketOrigin;
 
 class SocketService {
   private socket: Socket | null = null;
@@ -33,6 +35,26 @@ class SocketService {
       reconnectionDelayMax: 5000,
       timeout: 20000,
     });
+
+    // B1: Handle server-initiated forced disconnect.
+    // Server emits 'force_disconnect' BEFORE calling socket.disconnect(true),
+    // giving the client a chance to clear credentials cleanly.
+    this.socket.on('force_disconnect', (payload: { reason: string; message: string }) => {
+      console.warn('[SocketService] Server-forced disconnect received:', payload);
+      // 1. Disable auto-reconnect so the client doesn't loop on stale credentials
+      if (this.socket) {
+        this.socket.io.reconnection(false);
+      }
+      // 2. Clear in-memory access token immediately
+      import('./api').then(({ setAccessToken }) => setAccessToken(null));
+      // 3. Dispatch Redux logout — triggers IDB wipe (B2) and auth state clear
+      import('../store').then(({ store }) => {
+        import('../features/auth/authSlice').then(({ logout }) => {
+          store.dispatch(logout());
+        });
+      });
+    });
+
     return this.socket;
   }
 
@@ -73,11 +95,7 @@ class SocketService {
     }
   }
 
-  onMessageReceived(callback: (message: any) => void) {
-    if (this.socket) {
-      this.socket.on('message_received', callback);
-    }
-  }
+
 
   editMessage(data: { messageId: string; roomId: string; content: string; iv?: string }) {
     this.socket?.emit('edit_message', data);
@@ -113,41 +131,7 @@ class SocketService {
     }
   }
 
-  offMessageReceived(callback: (message: any) => void) {
-    if (this.socket) {
-      this.socket.off('message_received', callback);
-    }
-  }
 
-  offMessageEdited(callback: (data: any) => void) {
-    if (this.socket) {
-      this.socket.off('message_edited', callback);
-    }
-  }
-
-  offMessageDeleted(callback: (data: any) => void) {
-    if (this.socket) {
-      this.socket.off('message_deleted', callback);
-    }
-  }
-
-  offReactionUpdated(callback: (data: any) => void) {
-    if (this.socket) {
-      this.socket.off('reaction_updated', callback);
-    }
-  }
-
-  offMessagesRead(callback: (data: any) => void) {
-    if (this.socket) {
-      this.socket.off('messages_read', callback);
-    }
-  }
-
-  offMessagesDelivered(callback: (data: any) => void) {
-    if (this.socket) {
-      this.socket.off('messages_delivered', callback);
-    }
-  }
 
   offUserTyping(callback: (data: any) => void) {
     if (this.socket) {
@@ -161,18 +145,6 @@ class SocketService {
     }
   }
 
-  onUserJoined(callback: (data: any) => void) {
-    if (this.socket) {
-      this.socket.on('user_joined', callback);
-    }
-  }
-
-  onUserLeft(callback: (data: any) => void) {
-    if (this.socket) {
-      this.socket.on('user_left', callback);
-    }
-  }
-
   onPresenceUpdate(callback: (data: { userId: string; isOnline: boolean; lastSeen: string }) => void) {
     if (this.socket) {
       this.socket.on('presence_update', callback);
@@ -182,36 +154,6 @@ class SocketService {
   onUserTyping(callback: (data: { roomId: string; userId: string; userName: string; isTyping: boolean }) => void) {
     if (this.socket) {
       this.socket.on('user_typing', callback);
-    }
-  }
-
-  onMessageEdited(callback: (data: { messageId: string; roomId: string; content: string; editedAt: string }) => void) {
-    if (this.socket) {
-      this.socket.on('message_edited', callback);
-    }
-  }
-
-  onMessageDeleted(callback: (data: { messageId: string; roomId: string; deletedForEveryone: boolean }) => void) {
-    if (this.socket) {
-      this.socket.on('message_deleted', callback);
-    }
-  }
-
-  onReactionUpdated(callback: (data: { messageId: string; reactions: any[]; updatedBy: string }) => void) {
-    if (this.socket) {
-      this.socket.on('reaction_updated', callback);
-    }
-  }
-
-  onMessagesRead(callback: (data: { roomId: string; userId: string; messageIds: string[]; readAt: string }) => void) {
-    if (this.socket) {
-      this.socket.on('messages_read', callback);
-    }
-  }
-
-  onMessagesDelivered(callback: (data: { roomId: string; userId: string; messageIds: string[]; deliveredAt: string }) => void) {
-    if (this.socket) {
-      this.socket.on('messages_delivered', callback);
     }
   }
 

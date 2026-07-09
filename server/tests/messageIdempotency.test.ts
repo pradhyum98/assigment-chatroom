@@ -6,6 +6,7 @@ import { Message } from '../src/models/Message';
 import { ChatRoom } from '../src/models/ChatRoom';
 import { User } from '../src/models/User';
 import { setupSocketHandlers } from '../src/socket/socketHandlers';
+import { setIoForTest } from '../src/socket';
 
 // Load environment variables
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
@@ -83,6 +84,7 @@ describe('Message Idempotency and Deduplication', () => {
     };
 
     // Initialize handlers
+    setIoForTest(mockIo);
     setupSocketHandlers(mockIo);
 
     // Explicitly trigger connection and wait for mongoose queries inside connection listener to complete

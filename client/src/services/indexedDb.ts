@@ -70,6 +70,51 @@ class IndexedDBService {
     });
   }
 
+  async enqueueWithSequence(storeName: string, itemPayload: any): Promise<void> {
+    const db = await this.open();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction([storeName, 'sync_meta'], 'readwrite');
+      const metaStore = tx.objectStore('sync_meta');
+      const queueStore = tx.objectStore(storeName);
+
+      const getReq = metaStore.get('queue_seq');
+
+      getReq.onsuccess = () => {
+        const seqMeta = getReq.result;
+        const seq = (seqMeta?.value || 0) + 1;
+
+        const putMetaReq = metaStore.put({ key: 'queue_seq', value: seq });
+
+        putMetaReq.onsuccess = () => {
+          const queuedItem = {
+            ...itemPayload,
+            sequenceNumber: seq
+          };
+
+          const putQueueReq = queueStore.put(queuedItem);
+          putQueueReq.onsuccess = () => {
+            resolve();
+          };
+          putQueueReq.onerror = () => {
+            reject(putQueueReq.error);
+          };
+        };
+
+        putMetaReq.onerror = () => {
+          reject(putMetaReq.error);
+        };
+      };
+
+      getReq.onerror = () => {
+        reject(getReq.error);
+      };
+
+      tx.onerror = () => {
+        reject(tx.error);
+      };
+    });
+  }
+
   async delete(storeName: string, key: string): Promise<void> {
     const db = await this.open();
     return new Promise((resolve, reject) => {

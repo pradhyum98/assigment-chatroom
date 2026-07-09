@@ -33,8 +33,9 @@ const SignupPage: React.FC = () => {
       // Encrypt private key with user password (PBKDF2)
       const encryptedPrivateKey = await CryptoService.encryptPrivateKeyWithPassword(privateKey, formData.password, formData.email);
 
-      // Save private key locally for current session
-      localStorage.setItem('e2e_private_key', privateKey);
+      // Save private key in memory
+      const { secretStore } = await import('../../services/secretStore');
+      secretStore.setPrivateKey(keyPair.privateKey);
 
       const payload = { ...formData, publicKey, encryptedPrivateKey };
       const response = await api.post('/auth/signup', payload);

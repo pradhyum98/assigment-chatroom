@@ -3,6 +3,7 @@ import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { setMessages, clearTyping } from './chatSlice';
 import { clearUnreadCount, setCurrentRoom } from '../rooms/roomsSlice';
 import api, { getAccessToken } from '../../services/api';
+import { TransportConfig } from '../../config/TransportConfig';
 import { UploadService } from '../../services/uploadService';
 import { socketService } from '../../services/socket';
 import { Send, Mic, Plus, CheckCheck, Check, Loader2, Edit2, Trash2, Smile, FileText, Download, Phone, Video, MessageSquare, X, Pin, ArrowLeft, Copy, Forward, Star, Image, File, VolumeX, Ban, Search, Users, User, AlertTriangle } from 'lucide-react';
@@ -14,14 +15,14 @@ import DOMPurify from 'dompurify';
 import { useCrypto } from '../../hooks/useCrypto';
 import { CryptoService } from '../../services/cryptoService';
 import { ImageViewer } from './ImageViewer';
-import { syncManager } from '../../services/syncManager';
+import { syncEngine } from '../../services/SyncEngine';
 import './Chat.css';
 
 const getMediaUrl = (urlPath: string) => {
   if (!urlPath) return '';
   if (urlPath.startsWith('http')) return urlPath;
   const token = getAccessToken();
-  const serverUrl = import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace(/\/api$/, '') : 'http://localhost:5001';
+  const serverUrl = TransportConfig.mediaOrigin;
   return `${serverUrl}${urlPath}?token=${token}`;
 };
 
@@ -518,21 +519,30 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
         }
       }
 
-      await syncManager.enqueueMessage({
+      const clientMsgId = Math.random().toString(36).substring(7);
+      await syncEngine.enqueueMutation({
+        mutationId: globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : Math.random().toString(36).substring(7),
+        clientMsgId,
+        accountId: user._id,
         roomId: targetRoom.roomId,
-        senderId: user._id,
-        senderName: `${user.firstName} ${user.lastName}`,
-        content: contentToSend,
-        iv: ivToSend,
-        clientMsgId: Math.random().toString(36).substring(7),
-        type: forwardMsg.type || 'text',
-        mediaUrl: forwardMsg.mediaUrl,
-        mediaFilename: forwardMsg.mediaFilename,
-        mediaMimeType: forwardMsg.mediaMimeType,
-        mediaSize: forwardMsg.mediaSize,
-        mediaKey: forwardMsg.mediaKey,
-        mediaIv: forwardMsg.mediaIv,
-        actionType: 'send'
+        actionType: 'SEND_MESSAGE',
+        createdAt: new Date().toISOString(),
+        status: 'PENDING',
+        payload: {
+          senderId: user._id,
+          senderName: `${user.firstName} ${user.lastName}`,
+          content: contentToSend,
+          iv: ivToSend,
+          timestamp: new Date().toISOString(),
+          type: (forwardMsg.type || 'text') as any,
+          mediaUrl: forwardMsg.mediaUrl,
+          mediaFilename: forwardMsg.mediaFilename,
+          mediaMimeType: forwardMsg.mediaMimeType,
+          mediaSize: forwardMsg.mediaSize,
+          wrappedMediaKey: forwardMsg.wrappedMediaKey || forwardMsg.mediaKey,
+          mediaKeyIv: forwardMsg.mediaKeyIv,
+          mediaIv: forwardMsg.mediaIv
+        }
       });
       alert(`Message forwarded to ${targetRoom.roomName || 'chat'}`);
     } catch (e) {
@@ -581,15 +591,19 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
         }
       }
 
-      syncManager.enqueueMessage({
+      await syncEngine.enqueueMutation({
+        mutationId: globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : Math.random().toString(36).substring(7),
+        accountId: user._id,
         roomId: currentRoom.roomId,
-        senderId: user._id,
-        senderName: `${user.firstName} ${user.lastName}`,
-        content: contentToSend,
-        iv: ivToSend,
-        clientMsgId: editingMessageId,
-        type: 'text',
-        actionType: 'edit'
+        actionType: 'EDIT_MESSAGE',
+        createdAt: new Date().toISOString(),
+        status: 'PENDING',
+        payload: {
+          messageId: editingMessageId,
+          content: contentToSend,
+          editedAt: new Date().toISOString(),
+          iv: ivToSend
+        }
       });
       setEditingMessageId(null);
       setNewMessage('');
@@ -657,31 +671,32 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
         }
       }
 
-      const messageData = {
-        roomId: currentRoom.roomId,
-        senderId: user._id,
-        senderName: `${user.firstName} ${user.lastName}`,
-        content: contentToSend,
-        iv: ivToSend,
+      await syncEngine.enqueueMutation({
+        mutationId: globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : Math.random().toString(36).substring(7),
         clientMsgId,
-        replyTo: replyingTo ? (replyingTo.messageId || replyingTo._id) : undefined,
-        actionType: 'send' as const,
-        ...(mediaData ? {
-          type: mediaData.type,
-          mediaUrl: mediaData.url,
-          mediaFilename: mediaData.filename,
-          mediaMimeType: mediaData.mimetype,
-          mediaSize: mediaData.size,
-          encryptionVersion: encryptionVersionToSend,
+        accountId: user._id,
+        roomId: currentRoom.roomId,
+        actionType: 'SEND_MESSAGE',
+        createdAt: new Date().toISOString(),
+        status: 'PENDING',
+        payload: {
+          senderId: user._id,
+          senderName: `${user.firstName} ${user.lastName}`,
+          content: contentToSend,
+          iv: ivToSend,
+          timestamp: new Date().toISOString(),
+          type: mediaData ? (mediaData.type as any) : 'text',
+          replyTo: replyingTo ? (replyingTo.messageId || replyingTo._id) : undefined,
+          mediaUrl: mediaData?.url,
+          mediaFilename: mediaData?.filename,
+          mediaMimeType: mediaData?.mimetype,
+          mediaSize: mediaData?.size,
+          encryptionVersion: encryptionVersionToSend as any,
           wrappedMediaKey: wrappedMediaKeyToSend,
           mediaKeyIv: mediaKeyIvToSend,
-          mediaIv: mediaIvToSend,
-        } : {
-          type: 'text'
-        })
-      };
-
-      syncManager.enqueueMessage(messageData);
+          mediaIv: mediaIvToSend
+        }
+      });
       setNewMessage('');
       setReplyingTo(null);
       socketService.setTyping({ roomId: currentRoom.roomId, isTyping: false });
@@ -718,25 +733,30 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
         encryptionVersion: 2
       });
 
-      const messageData = {
-        roomId: currentRoom.roomId,
-        senderId: user._id,
-        senderName: `${user.firstName} ${user.lastName}`,
-        content: '',
+      await syncEngine.enqueueMutation({
+        mutationId: globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : Math.random().toString(36).substring(7),
         clientMsgId,
-        type: 'audio', // Treat voice notes as audio for playback UI
-        mediaUrl: mediaData.url,
-        mediaFilename: mediaData.filename,
-        mediaMimeType: 'audio/webm',
-        mediaSize: mediaData.size,
-        encryptionVersion: 2,
-        wrappedMediaKey: wrappedKey,
-        mediaKeyIv: wrapIv,
-        mediaIv: ivBase64,
-        actionType: 'send' as const
-      };
-
-      syncManager.enqueueMessage(messageData);
+        accountId: user._id,
+        roomId: currentRoom.roomId,
+        actionType: 'SEND_MESSAGE',
+        createdAt: new Date().toISOString(),
+        status: 'PENDING',
+        payload: {
+          senderId: user._id,
+          senderName: `${user.firstName} ${user.lastName}`,
+          content: '',
+          timestamp: new Date().toISOString(),
+          type: 'audio',
+          mediaUrl: mediaData.url,
+          mediaFilename: mediaData.filename,
+          mediaMimeType: 'audio/webm',
+          mediaSize: mediaData.size,
+          encryptionVersion: 2,
+          wrappedMediaKey: wrappedKey,
+          mediaKeyIv: wrapIv,
+          mediaIv: ivBase64
+        }
+      });
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : 'Unknown error';
       alert(`Failed to send voice message: ${errorMsg}`);
@@ -757,29 +777,38 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
 
   const handleDelete = (msg: any, forEveryone: boolean) => {
     if (!currentRoom || !user) return;
-    syncManager.enqueueMessage({
+    syncEngine.enqueueMutation({
+      mutationId: globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : Math.random().toString(36).substring(7),
+      accountId: user._id,
       roomId: currentRoom.roomId,
-      senderId: user._id,
-      senderName: `${user.firstName} ${user.lastName}`,
-      content: '',
-      clientMsgId: msg.messageId || msg._id,
-      type: 'text',
-      actionType: 'delete',
-      deleteForEveryone: forEveryone
+      actionType: 'DELETE_MESSAGE',
+      createdAt: new Date().toISOString(),
+      status: 'PENDING',
+      payload: {
+        messageId: msg.messageId || msg._id,
+        deletedForEveryone: forEveryone
+      }
     });
   };
 
   const handleReact = (msg: any, emoji: string) => {
     if (!currentRoom || !user) return;
-    syncManager.enqueueMessage({
+    const reactions = msg.reactions || [];
+    const hasReacted = reactions.some((r: any) => r.userId === user._id && r.emoji === emoji);
+    const actionType = hasReacted ? 'REMOVE_REACTION' : 'ADD_REACTION';
+
+    syncEngine.enqueueMutation({
+      mutationId: globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : Math.random().toString(36).substring(7),
+      accountId: user._id,
       roomId: currentRoom.roomId,
-      senderId: user._id,
-      senderName: `${user.firstName} ${user.lastName}`,
-      content: '',
-      clientMsgId: msg.messageId || msg._id,
-      type: 'reaction',
-      actionType: 'react',
-      reactionEmoji: emoji
+      actionType,
+      createdAt: new Date().toISOString(),
+      status: 'PENDING',
+      payload: {
+        messageId: msg.messageId || msg._id,
+        emoji,
+        userId: user._id
+      }
     });
   };
 

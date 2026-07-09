@@ -14,6 +14,7 @@ export interface UserDoc extends Document {
 
   // Crypto (E2EE)
   publicKey?: string;
+  identityVersion?: number;
   encryptedPrivateKey?: {
     ciphertext: string;
     iv: string;
@@ -95,6 +96,10 @@ const UserSchema = new Schema<UserDoc>(
     publicKey: {
       type: String,
       default: undefined,
+    },
+    identityVersion: {
+      type: Number,
+      default: 1,
     },
     encryptedPrivateKey: {
       type: {

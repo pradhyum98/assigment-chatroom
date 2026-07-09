@@ -15,7 +15,13 @@ export interface RoomDoc extends Document {
   lastMessage?: mongoose.Types.ObjectId;
   pinnedMessages: mongoose.Types.ObjectId[];
   unreadCounts: Map<string, number>;
-  encryptedRoomKeys: Map<string, string>;
+  encryptedRoomKeys: Map<string, { encryptedKey: string; identityVersion: number }>;
+  roomKeyVersion: number;
+  membershipRevision: number;
+  cryptoState: 'ACTIVE' | 'ROTATION_REQUIRED';
+  baselineSequence?: number;
+  minimumRetainedSequence?: number;
+  latestSequence?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -100,11 +106,44 @@ const ChatRoomSchema = new Schema<RoomDoc>(
       of: Number,
       default: {},
     },
-    // E2EE: participantId (string) -> encrypted base64 room key
+    // E2EE: participantId (string) -> { encryptedKey, identityVersion }
     encryptedRoomKeys: {
       type: Map,
-      of: String,
+      of: new Schema(
+        {
+          encryptedKey: { type: String, required: true },
+          identityVersion: { type: Number, required: true },
+        },
+        { _id: false }
+      ),
       default: {},
+    },
+    // Added for Mobile-Readiness Remediation Pass
+    roomKeyVersion: {
+      type: Number,
+      default: 1,
+    },
+    membershipRevision: {
+      type: Number,
+      default: 1,
+    },
+    cryptoState: {
+      type: String,
+      enum: ['ACTIVE', 'ROTATION_REQUIRED'],
+      default: 'ACTIVE',
+    },
+    // Milestone 3 Durable Room Event Metadata
+    baselineSequence: {
+      type: Number,
+      default: 0,
+    },
+    minimumRetainedSequence: {
+      type: Number,
+      default: 0,
+    },
+    latestSequence: {
+      type: Number,
+      default: 0,
     },
   },
   {

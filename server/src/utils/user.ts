@@ -19,6 +19,7 @@ export const mapUserResponse = (user: any): UserPublic => {
 
     // Crypto
     publicKey:     user.publicKey,
+    identityVersion: user.identityVersion,
     encryptedPrivateKey: user.encryptedPrivateKey,
 
     // Profile

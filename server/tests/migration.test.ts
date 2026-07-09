@@ -1,87 +1,129 @@
 import mongoose from 'mongoose';
-import dotenv from 'dotenv';
-import path from 'path';
 import { User } from '../src/models/User';
+import { ChatRoom } from '../src/models/ChatRoom';
+import connectDB from '../src/config/db';
+import migrate from '../src/migrations/02_initialize_room_crypto_state';
+import dotenv from 'dotenv';
+dotenv.config();
 
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
+const SUFFIX = `mig-${Date.now()}`;
 
-describe('Legacy Password Recovery Removal Migration', () => {
-  let testUsers: any[] = [];
+describe('Migration 02_initialize_room_crypto_state', () => {
+  let user1: any, user2: any;
+  const createdRoomIds: mongoose.Types.ObjectId[] = [];
+  const createdUserIds: mongoose.Types.ObjectId[] = [];
 
   beforeAll(async () => {
-    const mongoUri = process.env.MONGODB_URI;
-    if (!mongoUri) {
-      throw new Error('MONGODB_URI not defined');
-    }
-    if (mongoose.connection.readyState === 0) {
-      await mongoose.connect(mongoUri);
-    }
-
-    // Create test users with the legacy field explicitly set
-    testUsers.push(
-      await User.create({
-        firstName: 'Migrate1',
-        lastName: 'Tester',
-        email: `test_mig1_${Date.now()}@example.com`,
-        password: 'mypassword123',
-        friends: [],
-        privacyLastSeen: 'everyone',
-        privacyOnlineStatus: 'everyone',
-        encryptedPasswordRecovery: {
-          ciphertext: 'mock-cipher-1',
-          iv: 'mock-iv-1',
-          authTag: 'mock-tag-1',
-          version: 1
-        }
-      })
-    );
-
-    testUsers.push(
-      await User.create({
-        firstName: 'Migrate2',
-        lastName: 'Tester',
-        email: `test_mig2_${Date.now()}@example.com`,
-        password: 'mypassword123',
-        friends: [],
-        privacyLastSeen: 'everyone',
-        privacyOnlineStatus: 'everyone',
-        encryptedPasswordRecovery: {
-          ciphertext: 'mock-cipher-2',
-          iv: 'mock-iv-2',
-          authTag: 'mock-tag-2',
-          version: 1
-        }
-      })
-    );
+    await connectDB();
+    // Create users once for all tests (unique emails)
+    user1 = await User.create({
+      firstName: 'U1', lastName: 'L1', email: `u1-${SUFFIX}@migration-test.com`, password: 'password', identityVersion: 2,
+    });
+    user2 = await User.create({
+      firstName: 'U2', lastName: 'L2', email: `u2-${SUFFIX}@migration-test.com`, password: 'password', identityVersion: 1,
+    });
+    createdUserIds.push(user1._id, user2._id);
   });
 
   afterAll(async () => {
-    for (const u of testUsers) {
-      await User.deleteOne({ _id: u._id });
-    }
-    await mongoose.disconnect();
+    await ChatRoom.deleteMany({ _id: { $in: createdRoomIds } });
+    await User.deleteMany({ _id: { $in: createdUserIds } });
+    await mongoose.connection.close();
   });
 
-  test('successfully removes encryptedPasswordRecovery field from all user documents', async () => {
-    // 1. Verify fields exist in the database initially
-    for (const u of testUsers) {
-      const dbUser = await User.findById(u._id).select('+encryptedPasswordRecovery');
-      expect(dbUser?.encryptedPasswordRecovery).toBeDefined();
-      expect(dbUser?.encryptedPasswordRecovery?.ciphertext).toBeDefined();
-    }
+  it('sets legacy unverifiable envelope rooms to ROTATION_REQUIRED', async () => {
+    const room = await ChatRoom.create({
+      roomId: `legacy-${SUFFIX}`,
+      roomName: 'Test Legacy',
+      createdBy: user1._id,
+      participants: [user1._id],
+      isDM: false,
+    });
+    createdRoomIds.push(room._id);
 
-    // 2. Perform the migration query
-    const result = await User.updateMany(
-      {},
-      { $unset: { encryptedPasswordRecovery: 1 } }
+    // Bypass Mongoose to set legacy Map<string, string>
+    await ChatRoom.collection.updateOne(
+      { _id: room._id },
+      { $set: { encryptedRoomKeys: { [user1._id.toString()]: 'base64_key' } } }
     );
 
-    expect(result.matchedCount).toBeGreaterThanOrEqual(2);
+    await migrate(false);
 
-    // 3. Verify fields have been completely unset
-    for (const u of testUsers) {
-      const dbUser = await User.findById(u._id).select('+encryptedPasswordRecovery');
-      expect(dbUser?.encryptedPasswordRecovery).toBeUndefined();
-    }
+    // Use raw to avoid schema validation on legacy data
+    const raw = await ChatRoom.collection.findOne({ _id: room._id });
+    expect(raw?.cryptoState).toBe('ROTATION_REQUIRED');
+    expect(raw?.roomKeyVersion).toBe(1);
+    expect(raw?.membershipRevision).toBe(1);
+    const keyObj = raw?.encryptedRoomKeys?.[user1._id.toString()];
+    expect(keyObj?.identityVersion).toBe(0);
+  });
+
+  it('sets valid verifiable room to ACTIVE', async () => {
+    const room = await ChatRoom.create({
+      roomId: `valid-${SUFFIX}`,
+      roomName: 'Test Valid',
+      createdBy: user1._id,
+      participants: [user1._id],
+      isDM: false,
+    });
+    createdRoomIds.push(room._id);
+
+    await ChatRoom.collection.updateOne(
+      { _id: room._id },
+      { $set: { encryptedRoomKeys: { [user1._id.toString()]: { encryptedKey: 'key', identityVersion: 2 } } } }
+    );
+
+    await migrate(false);
+
+    const raw = await ChatRoom.collection.findOne({ _id: room._id });
+    expect(raw?.cryptoState).toBe('ACTIVE');
+  });
+
+  it('performs no writes during dry-run', async () => {
+    const room = await ChatRoom.create({
+      roomId: `dryrun-${SUFFIX}`,
+      roomName: 'Dry Run',
+      createdBy: user1._id,
+      participants: [user1._id],
+      isDM: false,
+    });
+    createdRoomIds.push(room._id);
+
+    await ChatRoom.collection.updateOne(
+      { _id: room._id },
+      { $set: { encryptedRoomKeys: { [user1._id.toString()]: 'legacy' } } }
+    );
+    // Explicitly unset cryptoState
+    await ChatRoom.collection.updateOne({ _id: room._id }, { $unset: { cryptoState: '' } });
+
+    await migrate(true); // dry run
+
+    const raw = await ChatRoom.collection.findOne({ _id: room._id });
+    expect(raw?.cryptoState).toBeUndefined(); // no changes made
+  });
+
+  it('is idempotent on rerun', async () => {
+    const room = await ChatRoom.create({
+      roomId: `idem-${SUFFIX}`,
+      roomName: 'Test Idempotent',
+      createdBy: user1._id,
+      participants: [user1._id],
+      isDM: false,
+    });
+    createdRoomIds.push(room._id);
+
+    await ChatRoom.collection.updateOne(
+      { _id: room._id },
+      { $set: { encryptedRoomKeys: { [user1._id.toString()]: { encryptedKey: 'key', identityVersion: 2 } } } }
+    );
+
+    await migrate(false);
+    const raw1 = await ChatRoom.collection.findOne({ _id: room._id });
+    expect(raw1?.cryptoState).toBe('ACTIVE');
+
+    // Rerun
+    await migrate(false);
+    const raw2 = await ChatRoom.collection.findOne({ _id: room._id });
+    expect(raw2?.cryptoState).toBe('ACTIVE');
   });
 });

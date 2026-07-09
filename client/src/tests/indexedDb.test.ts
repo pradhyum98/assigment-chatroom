@@ -166,4 +166,49 @@ describe('IndexedDB Staged Migration (v1 -> v2)', () => {
     const state = await localDb.get('sync_meta', 'queue_migration_v2');
     expect(state.value).toBe('failed');
   });
+
+  it('atomically enqueues message and sequence number (enqueueWithSequence)', async () => {
+    await localDb.open();
+    // Simulate v2 migration complete
+    const db = (localDb as any).db;
+    const tx = db.transaction(['sync_meta'], 'readwrite');
+    tx.objectStore('sync_meta').put({ key: 'queue_migration_v2', value: 'complete' });
+    await new Promise(resolve => tx.oncomplete = resolve);
+
+    const msgItem = {
+      queueId: 'q-atom-1',
+      clientMsgId: 'msg-atom-1',
+      roomId: 'room-1',
+      content: 'Hello',
+      actionType: 'send' as const,
+      createdAt: Date.now(),
+      status: 'pending' as const,
+      processingStartedAt: null,
+      leaseExpiresAt: null,
+      nextAttemptAt: Date.now(),
+      lastError: null,
+      retryCount: 0,
+      operationVersion: 2 as const,
+      sequenceNumber: -1 // will be overwritten
+    };
+
+    await localDb.enqueueWithSequence('offline_queue_v2', msgItem);
+    // const seqResult: any = msgItem; // mock since it mutates in place or similar
+    // The test asserts it was returned, but enqueueWithSequence returns void. Let's just read it back.
+
+    const storedMsg = await localDb.get('offline_queue_v2', 'q-atom-1');
+    expect(storedMsg.sequenceNumber).toBe(1);
+
+    const seqMeta = await localDb.get('sync_meta', 'queue_seq');
+    expect(seqMeta.value).toBe(1);
+
+    // Try a second message to verify sequence increments
+    const msgItem2 = { ...msgItem, queueId: 'q-atom-2', clientMsgId: 'msg-atom-2' };
+    await localDb.enqueueWithSequence('offline_queue_v2', msgItem2);
+    // const seqResult2: any = msgItem2;
+
+    const storedMsg2 = await localDb.get('offline_queue_v2', 'q-atom-2');
+    expect(storedMsg2.sequenceNumber).toBe(2);
+  });
 });
+

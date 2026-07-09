@@ -214,6 +214,9 @@ MessageSchema.index({ roomId: 1, timestamp: -1 });
 // Index for soft-delete queries (exclude deleted messages efficiently)
 MessageSchema.index({ roomId: 1, deletedForEveryone: 1, timestamp: -1 });
 
+// Milestone 3: Full-resync snapshot/checkpoint queries
+MessageSchema.index({ roomId: 1, roomSequenceNumber: -1 });
+
 // Full-text search index for Phase 8 search feature
 MessageSchema.index({ content: 'text' });
 

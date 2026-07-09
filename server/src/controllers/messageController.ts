@@ -116,35 +116,20 @@ export const editMessage = async (
     const msg = await Message.findOne({ messageId });
     if (!msg) throw new AppError('Message not found.', 404);
 
-    // Only text messages can be edited
-    if (msg.type !== 'text') throw new AppError('Only text messages can be edited.', 400);
-
-    // Only the original sender may edit
-    if (msg.senderId.toString() !== user._id) {
-      throw new AppError('You can only edit your own messages.', 403);
-    }
-
-    // Enforce edit time window
-    const ageMs = Date.now() - new Date(msg.timestamp).getTime();
-    if (ageMs > EDIT_WINDOW_MS) {
-      throw new AppError('Messages can only be edited within 15 minutes of sending.', 403);
-    }
-
-    // Verify room membership
-    await requireRoomParticipant(msg.roomId, user._id);
-
-    // Sanitize: strip HTML tags and dangerous protocol references
-    let sanitizedContent = data.content.replace(/<[^>]*>/g, '');
-    sanitizedContent = sanitizedContent.replace(/\b(javascript|vbscript|data|blob):/gi, '');
-
-    msg.content  = sanitizedContent;
-    msg.editedAt = new Date();
-    await msg.save();
+    const { result } = await (await import('../services/MessageService')).MessageService.editMessage(
+      {
+        messageId,
+        senderId: user._id.toString(),
+        content: data.content,
+        mutationId: (await import('crypto')).randomUUID() // In real world client should pass this
+      },
+      { email: user.email }
+    );
 
     res.status(200).json({
       success: true,
       message: 'Message edited.',
-      data: { message: msg },
+      data: { message: result },
     });
   } catch (error) {
     next(error);
@@ -173,27 +158,18 @@ export const deleteMessage = async (
     const msg = await Message.findOne({ messageId });
     if (!msg) throw new AppError('Message not found.', 404);
 
-    await requireRoomParticipant(msg.roomId, user._id);
-
-    if (deleteForEveryone) {
-      // Only the sender can delete for everyone (within 15 min)
-      if (msg.senderId.toString() !== user._id) {
-        throw new AppError('Only the sender can delete a message for everyone.', 403);
-      }
-      const ageMs = Date.now() - new Date(msg.timestamp).getTime();
-      if (ageMs > EDIT_WINDOW_MS) {
-        throw new AppError('Messages can only be deleted for everyone within 15 minutes.', 403);
-      }
-      msg.deletedForEveryone = true;
-      msg.deletedAt          = new Date();
-      msg.content            = '';
-      await msg.save();
-    } else {
-      // Delete for self: soft-delete by recording the user's deletion timestamp
-      // For simplicity we use the same deletedAt field (sender perspective only)
-      msg.deletedAt = new Date();
-      await msg.save();
+    if (!deleteForEveryone) {
+      throw new AppError('Only deleteForEveryone is supported.', 400);
     }
+
+    await (await import('../services/MessageService')).MessageService.deleteMessage(
+      {
+        messageId,
+        senderId: user._id.toString(),
+        mutationId: (await import('crypto')).randomUUID() // In real world client should pass this
+      },
+      { email: user.email }
+    );
 
     res.status(200).json({
       success: true,
@@ -223,30 +199,20 @@ export const reactToMessage = async (
     const { success, data, error } = reactSchema.safeParse(req.body);
     if (!success) throw new AppError(error.errors[0].message, 400);
 
-    const msg = await Message.findOne({ messageId });
-    if (!msg) throw new AppError('Message not found.', 404);
-
-    await requireRoomParticipant(msg.roomId, user._id);
-
-    const userId    = new mongoose.Types.ObjectId(user._id);
-    const existingIdx = msg.reactions.findIndex(
-      (r) => r.userId.toString() === user._id && r.emoji === data.emoji
+    const { result } = await (await import('../services/MessageService')).MessageService.reactToMessage(
+      {
+        messageId,
+        senderId: user._id.toString(),
+        emoji: data.emoji,
+        mutationId: (await import('crypto')).randomUUID()
+      },
+      { email: user.email }
     );
-
-    if (existingIdx !== -1) {
-      // Toggle off — remove existing reaction
-      msg.reactions.splice(existingIdx, 1);
-    } else {
-      // Add reaction
-      msg.reactions.push({ emoji: data.emoji, userId, createdAt: new Date() });
-    }
-
-    await msg.save();
 
     res.status(200).json({
       success: true,
       message: 'Reaction updated.',
-      data: { reactions: msg.reactions },
+      data: { reactions: result.reactions },
     });
   } catch (error) {
     next(error);

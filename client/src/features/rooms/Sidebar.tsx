@@ -12,6 +12,7 @@ import {
 } from '../friends/friendsSlice';
 import api from '../../services/api';
 import { CryptoService } from '../../services/cryptoService';
+import { syncEngine } from '../../services/SyncEngine';
 import {
   Search,
   Plus,
@@ -105,22 +106,13 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
   // ─────────────────────────────────────────────────────────────────────────────
   const getRoomKey = async (roomId: string, encryptedRoomKeys: any) => {
     try {
-      const savedKey = localStorage.getItem(`room_key_${roomId}`);
-      if (savedKey) return await CryptoService.importRoomKey(savedKey);
-      const privKeyBase64 = localStorage.getItem('e2e_private_key');
-      if (privKeyBase64 && encryptedRoomKeys) {
-        const myEncKey = encryptedRoomKeys[user?._id || ''];
-        if (myEncKey) {
-          const privKey = await CryptoService.importPrivateKey(privKeyBase64);
-          const roomKeyStr = await CryptoService.decryptRoomKey(myEncKey, privKey);
-          localStorage.setItem(`room_key_${roomId}`, roomKeyStr);
-          return await CryptoService.importRoomKey(roomKeyStr);
-        }
-      }
+      const { secretStore } = await import('../../services/secretStore');
+      const encryptedKeyForMe = encryptedRoomKeys ? encryptedRoomKeys[user?._id || ''] : undefined;
+      return await secretStore.getOrUnwrapRoomKey(roomId, encryptedKeyForMe);
     } catch (e) {
       console.error('Failed to decrypt room key in sidebar', e);
+      return null;
     }
-    return null;
   };
 
   useEffect(() => {
@@ -710,6 +702,85 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
       );
     }
 
+    if (settingsPanel === 'storage') {
+      return (
+        <>
+          <div className="settings-subpanel-header">
+            <button className="settings-back-btn" onClick={() => setSettingsPanel(null)}><ArrowLeft size={20} /></button>
+            <span className="settings-subpanel-title">Storage Manager</span>
+          </div>
+          <div className="room-list-scroll-wrapper" style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div style={{ padding: 12, borderRadius: 8, backgroundColor: 'var(--primary-low-opaque)', fontSize: 13, color: 'var(--text-muted)', lineHeight: '1.4' }}>
+                🔒 Back up your chat history, offline queue, and sync status. The backup file is strictly isolated and can only be restored by your current logged-in account to enforce E2EE privacy invariants.
+              </div>
+              
+              <button 
+                className="settings-menu-option" 
+                onClick={async () => {
+                  try {
+                    await syncEngine.backupService.exportBackup();
+                    alert('Backup file successfully generated and exported!');
+                  } catch (e: any) {
+                    alert('Export failed: ' + (e?.message || e));
+                  }
+                }}
+                style={{ padding: '16px', display: 'flex', justifyContent: 'center', backgroundColor: 'var(--primary)', color: 'white', borderRadius: 8 }}
+              >
+                Export Database Backup
+              </button>
+
+              <div style={{ borderTop: '1px solid var(--border)', margin: '8px 0' }}></div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <button 
+                  className="settings-menu-option" 
+                  onClick={() => document.getElementById('restore-file-input')?.click()}
+                  style={{ padding: '16px', display: 'flex', justifyContent: 'center', border: '1px solid var(--primary)', color: 'var(--primary)', borderRadius: 8 }}
+                >
+                  Import / Restore Backup
+                </button>
+                <input 
+                  type="file" 
+                  id="restore-file-input" 
+                  accept=".json" 
+                  style={{ display: 'none' }}
+                  onChange={async (event) => {
+                    const file = event.target.files?.[0];
+                    if (!file) return;
+                    
+                    const reader = new FileReader();
+                    reader.onload = async (e) => {
+                      const content = e.target?.result as string;
+                      if (!content) return;
+                      
+                      const confirmRestore = window.confirm(
+                        'WARNING: Restoring a backup will wipe your current local message cache and restore the snapshot from the file. Do you want to proceed?'
+                      );
+                      if (!confirmRestore) return;
+                      
+                      try {
+                        const res = await syncEngine.backupService.restoreBackup(content);
+                        if (res.success) {
+                          alert('Database successfully restored! Re-initializing...');
+                          window.location.reload();
+                        } else {
+                          alert(res.error || 'Restore failed.');
+                        }
+                      } catch (err: any) {
+                        alert('Restore failed: ' + (err?.message || err));
+                      }
+                    };
+                    reader.readAsText(file);
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        </>
+      );
+    }
+
     // Default settings menu
     return (
       <div className="room-list-scroll-wrapper" style={{ flex: 1, overflowY: 'auto' }}>
@@ -757,7 +828,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
             <ChevronRight size={18} color="var(--text-muted)" />
           </button>
 
-          <button className="settings-menu-option" onClick={() => {}}>
+          <button className="settings-menu-option" onClick={() => setSettingsPanel('storage')}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <Database size={18} color="var(--primary)" />
               <span className="settings-option-label">Storage Manager</span>

@@ -2,9 +2,12 @@ import axios from 'axios';
 import { store } from '../store';
 import { logout, loginSuccess } from '../features/auth/authSlice';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001/api';
+import { TransportConfig } from '../config/TransportConfig';
 
-console.log('[API Service] Initializing with URL:', API_URL);
+const isNative = TransportConfig.runtimePlatform !== 'web';
+const API_URL = TransportConfig.apiOrigin;
+
+console.log('[API Service] Initializing, isNative:', isNative, 'URL:', API_URL);
 
 let accessTokenInMemory: string | null = null;
 let isRefreshing = false;

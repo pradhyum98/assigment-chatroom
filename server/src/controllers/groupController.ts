@@ -4,6 +4,10 @@ import mongoose from 'mongoose';
 import { ChatRoom } from '../models/ChatRoom';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
+import { SequenceService } from '../services/SequenceService';
+import { RoomEvent, RoomEventType } from '../models/RoomEvent';
+import { UserEvent, UserEventType } from '../models/UserEvent';
+import { getIo } from '../socket';
 
 const updateRoomSchema = z.object({
   roomName: z.string().min(2).max(100).optional(),
@@ -20,6 +24,8 @@ const promoteAdminSchema = z.object({
 });
 
 export const addMembers = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
   try {
     const user = req.user;
     if (!user) throw new AppError('Unauthorized', 401);
@@ -28,7 +34,7 @@ export const addMembers = async (req: AuthRequest, res: Response, next: NextFunc
     const { success, data } = addMembersSchema.safeParse(req.body);
     if (!success) throw new AppError('Invalid member IDs', 400);
 
-    const room = await ChatRoom.findOne({ roomId });
+    const room = await ChatRoom.findOne({ roomId }).session(session);
     if (!room) throw new AppError('Room not found', 404);
     if (room.isDM) throw new AppError('Cannot add members to a DM', 400);
 
@@ -36,33 +42,97 @@ export const addMembers = async (req: AuthRequest, res: Response, next: NextFunc
     if (!isAdmin) throw new AppError('Only admins can add members', 403);
 
     const newParticipants = data.userIds
-      .filter(id => !room.participants.some(p => p.toString() === id))
-      .map(id => new mongoose.Types.ObjectId(id));
+      .filter(id => !room.participants.some(p => p.toString() === id));
 
     if (newParticipants.length > 0) {
-      room.participants.push(...newParticipants);
-      await room.save();
-    }
+      room.participants.push(...newParticipants.map(id => new mongoose.Types.ObjectId(id)));
+      room.membershipRevision = (room.membershipRevision || 1) + 1;
+      room.cryptoState = 'ROTATION_REQUIRED';
+      await room.save({ session });
 
-    res.status(200).json({ success: true, message: 'Members added', data: { room } });
+      const startRoomSeq = await SequenceService.allocateRoomSequence(roomId, 2, session);
+      const membershipEvent = new RoomEvent({
+        roomId,
+        sequenceNumber: startRoomSeq,
+        eventType: RoomEventType.MEMBERSHIP_CHANGED,
+        eventVersion: 1,
+        actorId: user._id.toString(),
+        payload: {
+          action: 'ADDED',
+          memberIds: newParticipants,
+          membershipRevision: room.membershipRevision
+        }
+      });
+      const rotationEvent = new RoomEvent({
+        roomId,
+        sequenceNumber: startRoomSeq + 1,
+        eventType: RoomEventType.ROOM_KEY_ROTATION_REQUIRED,
+        eventVersion: 1,
+        actorId: user._id.toString(),
+        payload: {
+          membershipRevision: room.membershipRevision,
+          roomKeyVersion: room.roomKeyVersion
+        }
+      });
+      await RoomEvent.insertMany([membershipEvent, rotationEvent], { session });
+
+      const userEvents = [];
+      for (const newParticipantId of newParticipants) {
+        const startUserSeq = await SequenceService.allocateUserSequence(newParticipantId, 1, session);
+        userEvents.push(new UserEvent({
+          userId: newParticipantId,
+          sequenceNumber: startUserSeq,
+          eventType: UserEventType.ROOM_ACCESS_GRANTED,
+          eventVersion: 1,
+          payload: {
+            roomId,
+            addedBy: user._id.toString(),
+            timestamp: new Date()
+          }
+        }));
+      }
+      if (userEvents.length > 0) {
+        await UserEvent.insertMany(userEvents, { session });
+      }
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const io = getIo();
+      if (io) {
+        io.to(roomId).emit('room_event', { events: [membershipEvent.toJSON(), rotationEvent.toJSON()] });
+        for (const ev of userEvents) {
+          io.to(ev.userId).emit('user_event', { events: [ev.toJSON()] });
+        }
+      }
+
+      res.status(200).json({ success: true, message: 'Members added', data: { room } });
+    } else {
+      await session.abortTransaction();
+      session.endSession();
+      res.status(200).json({ success: true, message: 'No new members added', data: { room } });
+    }
   } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
     next(error);
   }
 };
 
 export const kickMember = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
   try {
     const user = req.user;
     if (!user) throw new AppError('Unauthorized', 401);
 
     const { roomId, userId: targetUserId } = req.params;
 
-    const room = await ChatRoom.findOne({ roomId });
+    const room = await ChatRoom.findOne({ roomId }).session(session);
     if (!room) throw new AppError('Room not found', 404);
     if (room.isDM) throw new AppError('Cannot kick members from a DM', 400);
 
     const isAdmin = room.admins.some(adminId => adminId.toString() === user._id.toString());
-    const isOwner = room.createdBy.toString() === user._id.toString();
     const isTargetOwner = room.createdBy.toString() === targetUserId;
 
     if (!isAdmin) throw new AppError('Only admins can kick members', 403);
@@ -73,21 +143,76 @@ export const kickMember = async (req: AuthRequest, res: Response, next: NextFunc
     if (room.encryptedRoomKeys && room.encryptedRoomKeys.has(targetUserId)) {
       room.encryptedRoomKeys.delete(targetUserId);
     }
-    await room.save();
+    room.membershipRevision = (room.membershipRevision || 1) + 1;
+    room.cryptoState = 'ROTATION_REQUIRED';
+    await room.save({ session });
+
+    const startRoomSeq = await SequenceService.allocateRoomSequence(roomId, 2, session);
+    const membershipEvent = new RoomEvent({
+      roomId,
+      sequenceNumber: startRoomSeq,
+      eventType: RoomEventType.MEMBERSHIP_CHANGED,
+      eventVersion: 1,
+      actorId: user._id.toString(),
+      payload: {
+        action: 'REMOVED',
+        memberId: targetUserId,
+        membershipRevision: room.membershipRevision
+      }
+    });
+    const rotationEvent = new RoomEvent({
+      roomId,
+      sequenceNumber: startRoomSeq + 1,
+      eventType: RoomEventType.ROOM_KEY_ROTATION_REQUIRED,
+      eventVersion: 1,
+      actorId: user._id.toString(),
+      payload: {
+        membershipRevision: room.membershipRevision,
+        roomKeyVersion: room.roomKeyVersion
+      }
+    });
+    await RoomEvent.insertMany([membershipEvent, rotationEvent], { session });
+
+    const startUserSeq = await SequenceService.allocateUserSequence(targetUserId, 1, session);
+    const userEvent = new UserEvent({
+      userId: targetUserId,
+      sequenceNumber: startUserSeq,
+      eventType: UserEventType.ROOM_ACCESS_REVOKED,
+      eventVersion: 1,
+      payload: {
+        roomId,
+        revokedBy: user._id.toString(),
+        timestamp: new Date()
+      }
+    });
+    await UserEvent.create([userEvent], { session });
+
+    await session.commitTransaction();
+    session.endSession();
+
+    const io = getIo();
+    if (io) {
+      io.to(roomId).emit('room_event', { events: [membershipEvent.toJSON(), rotationEvent.toJSON()] });
+      io.to(targetUserId).emit('user_event', { events: [userEvent.toJSON()] });
+    }
 
     res.status(200).json({ success: true, message: 'Member kicked', data: { room } });
   } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
     next(error);
   }
 };
 
 export const leaveRoom = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
   try {
     const user = req.user;
     if (!user) throw new AppError('Unauthorized', 401);
 
     const { roomId } = req.params;
-    const room = await ChatRoom.findOne({ roomId });
+    const room = await ChatRoom.findOne({ roomId }).session(session);
     if (!room) throw new AppError('Room not found', 404);
     if (room.isDM) throw new AppError('Cannot leave a DM', 400);
 
@@ -100,15 +225,70 @@ export const leaveRoom = async (req: AuthRequest, res: Response, next: NextFunct
     if (room.encryptedRoomKeys && room.encryptedRoomKeys.has(user._id.toString())) {
       room.encryptedRoomKeys.delete(user._id.toString());
     }
-    await room.save();
+    room.membershipRevision = (room.membershipRevision || 1) + 1;
+    room.cryptoState = 'ROTATION_REQUIRED';
+    await room.save({ session });
+
+    const startRoomSeq = await SequenceService.allocateRoomSequence(roomId, 2, session);
+    const membershipEvent = new RoomEvent({
+      roomId,
+      sequenceNumber: startRoomSeq,
+      eventType: RoomEventType.MEMBERSHIP_CHANGED,
+      eventVersion: 1,
+      actorId: user._id.toString(),
+      payload: {
+        action: 'LEFT',
+        memberId: user._id.toString(),
+        membershipRevision: room.membershipRevision
+      }
+    });
+    const rotationEvent = new RoomEvent({
+      roomId,
+      sequenceNumber: startRoomSeq + 1,
+      eventType: RoomEventType.ROOM_KEY_ROTATION_REQUIRED,
+      eventVersion: 1,
+      actorId: user._id.toString(),
+      payload: {
+        membershipRevision: room.membershipRevision,
+        roomKeyVersion: room.roomKeyVersion
+      }
+    });
+    await RoomEvent.insertMany([membershipEvent, rotationEvent], { session });
+
+    const startUserSeq = await SequenceService.allocateUserSequence(user._id.toString(), 1, session);
+    const userEvent = new UserEvent({
+      userId: user._id.toString(),
+      sequenceNumber: startUserSeq,
+      eventType: UserEventType.ROOM_ACCESS_REVOKED,
+      eventVersion: 1,
+      payload: {
+        roomId,
+        revokedBy: user._id.toString(),
+        timestamp: new Date()
+      }
+    });
+    await UserEvent.create([userEvent], { session });
+
+    await session.commitTransaction();
+    session.endSession();
+
+    const io = getIo();
+    if (io) {
+      io.to(roomId).emit('room_event', { events: [membershipEvent.toJSON(), rotationEvent.toJSON()] });
+      io.to(user._id.toString()).emit('user_event', { events: [userEvent.toJSON()] });
+    }
 
     res.status(200).json({ success: true, message: 'Left room' });
   } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
     next(error);
   }
 };
 
 export const promoteAdmin = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
   try {
     const user = req.user;
     if (!user) throw new AppError('Unauthorized', 401);
@@ -117,7 +297,7 @@ export const promoteAdmin = async (req: AuthRequest, res: Response, next: NextFu
     const { success, data } = promoteAdminSchema.safeParse(req.body);
     if (!success) throw new AppError('Invalid request body', 400);
 
-    const room = await ChatRoom.findOne({ roomId });
+    const room = await ChatRoom.findOne({ roomId }).session(session);
     if (!room) throw new AppError('Room not found', 404);
     if (room.isDM) throw new AppError('Not applicable to DMs', 400);
 
@@ -130,23 +310,53 @@ export const promoteAdmin = async (req: AuthRequest, res: Response, next: NextFu
     const isAlreadyAdmin = room.admins.some(a => a.toString() === data.userId);
     if (!isAlreadyAdmin) {
       room.admins.push(new mongoose.Types.ObjectId(data.userId));
-      await room.save();
-    }
+      await room.save({ session });
 
-    res.status(200).json({ success: true, message: 'User promoted to admin', data: { room } });
+      const startRoomSeq = await SequenceService.allocateRoomSequence(roomId, 1, session);
+      const adminEvent = new RoomEvent({
+        roomId,
+        sequenceNumber: startRoomSeq,
+        eventType: RoomEventType.ADMIN_CHANGED,
+        eventVersion: 1,
+        actorId: user._id.toString(),
+        payload: {
+          action: 'PROMOTED',
+          memberId: data.userId
+        }
+      });
+      await RoomEvent.create([adminEvent], { session });
+      
+      await session.commitTransaction();
+      session.endSession();
+
+      const io = getIo();
+      if (io) {
+        io.to(roomId).emit('room_event', { events: [adminEvent.toJSON()] });
+      }
+      
+      res.status(200).json({ success: true, message: 'User promoted to admin', data: { room } });
+    } else {
+      await session.abortTransaction();
+      session.endSession();
+      res.status(200).json({ success: true, message: 'User already admin', data: { room } });
+    }
   } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
     next(error);
   }
 };
 
 export const demoteAdmin = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
   try {
     const user = req.user;
     if (!user) throw new AppError('Unauthorized', 401);
 
     const { roomId, userId: targetUserId } = req.params;
 
-    const room = await ChatRoom.findOne({ roomId });
+    const room = await ChatRoom.findOne({ roomId }).session(session);
     if (!room) throw new AppError('Room not found', 404);
 
     const isOwner = room.createdBy.toString() === user._id.toString();
@@ -156,16 +366,49 @@ export const demoteAdmin = async (req: AuthRequest, res: Response, next: NextFun
       throw new AppError('Owner cannot be demoted', 400);
     }
 
-    room.admins = room.admins.filter(a => a.toString() !== targetUserId);
-    await room.save();
+    const isAlreadyAdmin = room.admins.some(a => a.toString() === targetUserId);
+    if (isAlreadyAdmin) {
+      room.admins = room.admins.filter(a => a.toString() !== targetUserId);
+      await room.save({ session });
 
-    res.status(200).json({ success: true, message: 'User demoted from admin', data: { room } });
+      const startRoomSeq = await SequenceService.allocateRoomSequence(roomId, 1, session);
+      const adminEvent = new RoomEvent({
+        roomId,
+        sequenceNumber: startRoomSeq,
+        eventType: RoomEventType.ADMIN_CHANGED,
+        eventVersion: 1,
+        actorId: user._id.toString(),
+        payload: {
+          action: 'DEMOTED',
+          memberId: targetUserId
+        }
+      });
+      await RoomEvent.create([adminEvent], { session });
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const io = getIo();
+      if (io) {
+        io.to(roomId).emit('room_event', { events: [adminEvent.toJSON()] });
+      }
+      
+      res.status(200).json({ success: true, message: 'User demoted from admin', data: { room } });
+    } else {
+      await session.abortTransaction();
+      session.endSession();
+      res.status(200).json({ success: true, message: 'User not admin', data: { room } });
+    }
   } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
     next(error);
   }
 };
 
 export const updateRoom = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
   try {
     const user = req.user;
     if (!user) throw new AppError('Unauthorized', 401);
@@ -174,20 +417,61 @@ export const updateRoom = async (req: AuthRequest, res: Response, next: NextFunc
     const { success, data } = updateRoomSchema.safeParse(req.body);
     if (!success) throw new AppError('Invalid payload', 400);
 
-    const room = await ChatRoom.findOne({ roomId });
+    const room = await ChatRoom.findOne({ roomId }).session(session);
     if (!room) throw new AppError('Room not found', 404);
 
     const isAdmin = room.admins.some(adminId => adminId.toString() === user._id.toString());
     if (!isAdmin) throw new AppError('Only admins can update room details', 403);
 
-    if (data.roomName) room.roomName = data.roomName;
-    if (data.description !== undefined) room.description = data.description;
-    if (data.avatarColor) room.avatarColor = data.avatarColor;
+    let changed = false;
+    if (data.roomName && data.roomName !== room.roomName) {
+      room.roomName = data.roomName;
+      changed = true;
+    }
+    if (data.description !== undefined && data.description !== room.description) {
+      room.description = data.description;
+      changed = true;
+    }
+    if (data.avatarColor && data.avatarColor !== room.avatarColor) {
+      room.avatarColor = data.avatarColor;
+      changed = true;
+    }
 
-    await room.save();
+    if (changed) {
+      await room.save({ session });
 
-    res.status(200).json({ success: true, message: 'Room updated', data: { room } });
+      const startRoomSeq = await SequenceService.allocateRoomSequence(roomId, 1, session);
+      const metadataEvent = new RoomEvent({
+        roomId,
+        sequenceNumber: startRoomSeq,
+        eventType: RoomEventType.ROOM_METADATA_CHANGED,
+        eventVersion: 1,
+        actorId: user._id.toString(),
+        payload: {
+          roomName: data.roomName,
+          description: data.description,
+          avatarColor: data.avatarColor
+        }
+      });
+      await RoomEvent.create([metadataEvent], { session });
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const io = getIo();
+      if (io) {
+        io.to(roomId).emit('room_event', { events: [metadataEvent.toJSON()] });
+      }
+
+      res.status(200).json({ success: true, message: 'Room updated', data: { room } });
+    } else {
+      await session.abortTransaction();
+      session.endSession();
+      res.status(200).json({ success: true, message: 'No changes', data: { room } });
+    }
   } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
     next(error);
   }
 };

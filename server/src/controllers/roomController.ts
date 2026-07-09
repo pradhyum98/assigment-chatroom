@@ -317,18 +317,20 @@ export const removeMember = async (
   res: Response,
   next: NextFunction
 ): Promise<void> => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const user = req.user;
     if (!user) throw new AppError('Unauthorized', 401);
 
     const { roomId, memberId } = req.params;
-    const { encryptedRoomKeys } = req.body;
 
     if (!mongoose.Types.ObjectId.isValid(memberId)) {
       throw new AppError('Invalid member ID.', 400);
     }
 
-    const room = await ChatRoom.findOne({ roomId });
+    const room = await ChatRoom.findOne({ roomId }).session(session);
     if (!room) throw new AppError('Room not found.', 404);
 
     if (room.isDM) {
@@ -342,15 +344,82 @@ export const removeMember = async (
       throw new AppError('Only admins can remove members.', 403);
     }
 
+    // We must ensure the mutation is idempotent using mutationId if provided, but the client doesn't send it yet in the legacy route.
+    // We'll generate one for the server-side transaction for now, or just skip assertUniqueMutation for legacy endpoints until client updates.
+
     room.participants = room.participants.filter((pId) => pId.toString() !== memberId);
     room.admins = room.admins.filter((adminId) => adminId.toString() !== memberId);
     
-    // Update the encrypted keys with the newly provided ones for the remaining members
-    if (encryptedRoomKeys) {
-      room.encryptedRoomKeys = encryptedRoomKeys;
+    // Drop the departed member's key from the map (using Mongoose map manipulation)
+    if (room.encryptedRoomKeys) {
+      room.encryptedRoomKeys.delete(memberId);
     }
 
-    await room.save();
+    // Advance membership revision and force rotation
+    room.membershipRevision = (room.membershipRevision || 1) + 1;
+    room.cryptoState = 'ROTATION_REQUIRED';
+
+    await room.save({ session });
+
+    // Generate RoomEvents
+    const { SequenceService } = await import('../services/SequenceService');
+    const { RoomEvent, RoomEventType } = await import('../models/RoomEvent');
+    const { UserEvent, UserEventType } = await import('../models/UserEvent');
+
+    const startRoomSeq = await SequenceService.allocateRoomSequence(roomId, 2, session);
+    const membershipEvent = new RoomEvent({
+      roomId,
+      sequenceNumber: startRoomSeq,
+      eventType: RoomEventType.MEMBERSHIP_CHANGED,
+      eventVersion: 1,
+      actorId: user._id.toString(),
+      payload: {
+        action: 'REMOVED',
+        memberId,
+        membershipRevision: room.membershipRevision
+      }
+    });
+    
+    const rotationEvent = new RoomEvent({
+      roomId,
+      sequenceNumber: startRoomSeq + 1,
+      eventType: RoomEventType.ROOM_KEY_ROTATION_REQUIRED,
+      eventVersion: 1,
+      actorId: user._id.toString(),
+      payload: {
+        membershipRevision: room.membershipRevision,
+        roomKeyVersion: room.roomKeyVersion
+      }
+    });
+
+    await RoomEvent.insertMany([membershipEvent, rotationEvent], { session });
+
+    // Generate UserEvent for the removed user
+    const startUserSeq = await SequenceService.allocateUserSequence(memberId, 1, session);
+    const userEvent = new UserEvent({
+      userId: memberId,
+      sequenceNumber: startUserSeq,
+      eventType: UserEventType.ROOM_ACCESS_REVOKED,
+      eventVersion: 1,
+      payload: {
+        roomId,
+        revokedBy: user._id.toString(),
+        timestamp: new Date()
+      }
+    });
+
+    await UserEvent.create([userEvent], { session });
+
+    await session.commitTransaction();
+    session.endSession();
+
+    // Broadcast room events
+    const { getIo } = await import('../socket');
+    const io = getIo();
+    if (io) {
+      io.to(roomId).emit('room_event', { events: [membershipEvent.toJSON(), rotationEvent.toJSON()] });
+      io.to(memberId).emit('user_event', { events: [userEvent.toJSON()] });
+    }
 
     res.status(200).json({
       success: true,
@@ -358,6 +427,8 @@ export const removeMember = async (
       data: { room },
     });
   } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
     next(error);
   }
 };

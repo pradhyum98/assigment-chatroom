@@ -17,13 +17,14 @@ import uploadRoutes from './routes/upload';
 import callRoutes from './routes/calls';
 import webrtcRoutes from './routes/webrtc';
 import notificationsRoutes from './routes/notifications';
+import syncRoutes from './routes/sync';
 import path from 'path';
 import { authenticate } from './middleware/auth';
 import { logger } from './middleware/logger';
 import { errorHandler } from './middleware/errorHandler';
-import { setupSocketHandlers } from './socket/socketHandlers';
 import { preventNoSqlInjection } from './middleware/validation';
 import { authLimiter, generalLimiter } from './middleware/rateLimiter';
+import { initIo } from './socket';
 
 import { requestLogger } from './middleware/requestLogger';
 
@@ -52,10 +53,20 @@ app.set('trust proxy', 1);
 
 const server = createServer(app);
 
-// Strict CORS config for Express
-const allowedOrigin = process.env.CLIENT_URL || 'http://localhost:5173';
+const allowedOrigins = [
+  process.env.CLIENT_URL || 'http://localhost:5173',
+  'https://localhost',
+  'http://localhost'
+];
+
 const corsOptions = {
-  origin: allowedOrigin,
+  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+    if (!origin || allowedOrigins.includes(origin) || origin.startsWith('capacitor://')) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
@@ -81,12 +92,9 @@ app.use(preventNoSqlInjection); // Global check to prevent NoSQL query operator 
 app.use(requestLogger);
 
 // Strict CORS config for Socket.IO
-const io = new Server(server, {
-  cors: corsOptions,
-});
+initIo(server, corsOptions);
 
 connectDB();
-setupSocketHandlers(io);
 
 // Mount rate limiters securely to relevant endpoints
 app.use('/api/auth', authLimiter, authRoutes);
@@ -99,6 +107,7 @@ app.use('/api/messages', generalLimiter, messageRoutes);
 app.use('/api/friends', generalLimiter, friendsRoutes);
 app.use('/api/upload', generalLimiter, uploadRoutes);
 app.use('/api/notifications', generalLimiter, notificationsRoutes);
+app.use('/api/sync', generalLimiter, syncRoutes);
 
 // Serve the uploads directory statically (gated by authenticate middleware)
 app.use('/uploads', authenticate, express.static(path.join(__dirname, '../uploads')));

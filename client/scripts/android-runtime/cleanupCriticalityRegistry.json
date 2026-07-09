@@ -1,0 +1,25 @@
+{
+  "cleanupActions": [
+    { "cleanupActionId": "CLEANUP-MOCK-SERVER-SESSION-RESET", "defaultIntegrityImpact": true, "affectedExecutionClasses": ["ANDROID_RUNTIME"], "requiredEvidenceFields": ["sessionsReset"] },
+    { "cleanupActionId": "CLEANUP-MOCK-SERVER-DATABASE-RESET", "defaultIntegrityImpact": true, "affectedExecutionClasses": ["ANDROID_RUNTIME"], "requiredEvidenceFields": ["databaseReset"] },
+    { "cleanupActionId": "CLEANUP-PENDING-REQUEST-DRAIN", "defaultIntegrityImpact": true, "affectedExecutionClasses": ["ANDROID_RUNTIME"], "requiredEvidenceFields": ["requestsDrained"] },
+    { "cleanupActionId": "CLEANUP-COOKIE-MANAGER-CLEAR", "defaultIntegrityImpact": true, "affectedExecutionClasses": ["ANDROID_RUNTIME"], "requiredEvidenceFields": ["cookiesCleared"] },
+    { "cleanupActionId": "CLEANUP-APP-FORCE-STOP", "defaultIntegrityImpact": true, "affectedExecutionClasses": ["ANDROID_RUNTIME"], "requiredEvidenceFields": ["appStopped"] },
+    { "cleanupActionId": "CLEANUP-PM-CLEAR", "defaultIntegrityImpact": true, "affectedExecutionClasses": ["ANDROID_RUNTIME"], "requiredEvidenceFields": ["pmCleared"] },
+    { "cleanupActionId": "CLEANUP-TARGET-APK-UNINSTALL", "defaultIntegrityImpact": true, "affectedExecutionClasses": ["ANDROID_RUNTIME"], "requiredEvidenceFields": ["targetUninstalled"] },
+    { "cleanupActionId": "CLEANUP-INSTRUMENTATION-APK-UNINSTALL", "defaultIntegrityImpact": true, "affectedExecutionClasses": ["ANDROID_RUNTIME"], "requiredEvidenceFields": ["instrumentationUninstalled"] },
+    { "cleanupActionId": "CLEANUP-EMULATOR-RUNTIME-APK-UNINSTALL", "defaultIntegrityImpact": true, "affectedExecutionClasses": ["ANDROID_RUNTIME"], "requiredEvidenceFields": ["emulatorRuntimeUninstalled"] },
+    { "cleanupActionId": "CLEANUP-TEST-CA-RESOURCE-DELETION", "defaultIntegrityImpact": true, "affectedExecutionClasses": ["ANDROID_RUNTIME"], "requiredEvidenceFields": ["caDeleted"] },
+    { "cleanupActionId": "CLEANUP-GENERATED-CERT-DELETION", "defaultIntegrityImpact": true, "affectedExecutionClasses": ["ANDROID_RUNTIME", "STATIC_INSPECTION"], "requiredEvidenceFields": ["certDeleted"] },
+    { "cleanupActionId": "CLEANUP-GENERATED-KEY-DELETION", "defaultIntegrityImpact": true, "affectedExecutionClasses": ["ANDROID_RUNTIME", "STATIC_INSPECTION"], "requiredEvidenceFields": ["keyDeleted"] },
+    { "cleanupActionId": "CLEANUP-SERVER-SHUTDOWN", "defaultIntegrityImpact": true, "affectedExecutionClasses": ["ANDROID_RUNTIME"], "requiredEvidenceFields": ["serverStopped"] },
+    { "cleanupActionId": "CLEANUP-CDP-DISCONNECT", "defaultIntegrityImpact": true, "affectedExecutionClasses": ["ANDROID_RUNTIME"], "requiredEvidenceFields": ["cdpDisconnected"] },
+    { "cleanupActionId": "CLEANUP-PORT-RELEASE", "defaultIntegrityImpact": true, "affectedExecutionClasses": ["ANDROID_RUNTIME"], "requiredEvidenceFields": ["portsReleased"] },
+    { "cleanupActionId": "CLEANUP-TEMPORARY-AAB-EXTRACTION-DELETION", "defaultIntegrityImpact": true, "affectedExecutionClasses": ["STATIC_INSPECTION"], "requiredEvidenceFields": ["aabExtractionsDeleted"] },
+    { "cleanupActionId": "CLEANUP-TEMPORARY-APK-EXTRACTION-DELETION", "defaultIntegrityImpact": true, "affectedExecutionClasses": ["STATIC_INSPECTION"], "requiredEvidenceFields": ["apkExtractionsDeleted"] },
+    { "cleanupActionId": "CLEANUP-TEMPORARY-UNIVERSAL-APK-DELETION", "defaultIntegrityImpact": true, "affectedExecutionClasses": ["STATIC_INSPECTION"], "requiredEvidenceFields": ["universalApkDeleted"] },
+    { "cleanupActionId": "CLEANUP-TEMPORARY-EVIDENCE-STAGING-DELETION", "defaultIntegrityImpact": true, "affectedExecutionClasses": ["ANDROID_RUNTIME", "STATIC_INSPECTION"], "requiredEvidenceFields": ["stagingDeleted"] },
+    { "cleanupActionId": "CLEANUP-NATIVE-CERTIFICATE-REMOVAL", "defaultIntegrityImpact": true, "affectedExecutionClasses": ["ANDROID_RUNTIME"], "requiredEvidenceFields": ["certificateDeleted"] },
+    { "cleanupActionId": "CLEANUP-EMULATOR-PM-CLEAR", "defaultIntegrityImpact": true, "affectedExecutionClasses": ["ANDROID_RUNTIME"], "requiredEvidenceFields": ["pmClearExecuted"] }
+  ]
+}
