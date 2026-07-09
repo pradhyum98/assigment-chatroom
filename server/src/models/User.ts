@@ -14,6 +14,7 @@ export interface UserDoc extends Document {
 
   // Crypto (E2EE)
   publicKey?: string;
+  identityVersion?: number;
   encryptedPrivateKey?: {
     ciphertext: string;
     iv: string;
@@ -33,6 +34,10 @@ export interface UserDoc extends Document {
   // Privacy settings (Phase 9)
   privacyLastSeen: 'everyone' | 'friends' | 'nobody';
   privacyOnlineStatus: 'everyone' | 'friends' | 'nobody';
+
+  // Password reset fields
+  passwordResetToken?: string;
+  passwordResetExpires?: Date;
 
   createdAt: Date;
   updatedAt: Date;
@@ -92,6 +97,10 @@ const UserSchema = new Schema<UserDoc>(
       type: String,
       default: undefined,
     },
+    identityVersion: {
+      type: Number,
+      default: 1,
+    },
     encryptedPrivateKey: {
       type: {
         ciphertext: String,
@@ -138,6 +147,16 @@ const UserSchema = new Schema<UserDoc>(
       type: String,
       enum: ['everyone', 'friends', 'nobody'],
       default: 'friends',
+    },
+    passwordResetToken: {
+      type: String,
+      default: undefined,
+      select: false,
+    },
+    passwordResetExpires: {
+      type: Date,
+      default: undefined,
+      select: false,
     },
   },
   {

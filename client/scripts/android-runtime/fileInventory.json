@@ -1,0 +1,76 @@
+{
+  "formatVersion": 2,
+  "newProductionFiles": [
+    "client/src/config/transport/types.ts",
+    "client/src/config/transport/transportPolicy.ts",
+    "client/src/config/transport/resolveTransportConfig.ts",
+    "client/src/config/transport/viteTransportAdapter.ts",
+    "client/src/config/TransportConfig.ts",
+    "client/src/services/NativeRuntimeDiagnostics.ts"
+  ],
+  "newTestFiles": [
+    "client/scripts/tests/policy-parity.test.cjs",
+    "client/scripts/security-gate.test.cjs",
+    "client/scripts/cap-gate.test.cjs",
+    "client/scripts/tests/verify-sync-config.test.cjs",
+    "client/scripts/tests/sync-attestation.test.cjs",
+    "client/scripts/tests/release-audit.test.cjs",
+    "client/scripts/tests/release-runtime-security-assertions.test.cjs",
+    "client/scripts/tests/source-set-isolation.test.cjs",
+    "client/scripts/tests/gradle-dsl-validation.test.cjs",
+    "client/src/tests/diagnosticsSecrecy.test.ts",
+    "client/scripts/android-runtime/tests/parsers/parseHostileTestMatrix.test.cjs",
+    "client/scripts/android-runtime/tests/parsers/parsePhase2CRuntimeMatrix.test.cjs",
+    "client/scripts/android-runtime/tests/parsers/parseRealDeviceEvidenceMatrix.test.cjs",
+    "client/scripts/android-runtime/tests/parsers/parseCoverageTable.test.cjs",
+    "client/scripts/android-runtime/tests/parsers/parseEvidenceLedger.test.cjs",
+    "client/scripts/android-runtime/tests/decision-registry.test.cjs",
+    "client/scripts/android-runtime/tests/requirement-registry.test.cjs",
+    "client/scripts/android-runtime/tests/registry-schema-validation.test.cjs",
+    "client/scripts/android-runtime/tests/coverage-range-expansion.test.cjs",
+    "client/scripts/android-runtime/tests/merged-manifest.test.cjs",
+    "client/scripts/android-runtime/tests/repo-root-resolver.test.cjs",
+    "client/scripts/android-runtime/tests/verify-file-inventory.test.cjs",
+    "client/scripts/android-runtime/tests/raw-evidence-schemas.test.cjs",
+    "client/scripts/android-runtime/tests/gate-e-direct-gradle.test.cjs",
+    "client/scripts/android-runtime/tests/base-module-aab-extraction.test.cjs",
+    "client/scripts/android-runtime/tests/structural-readiness-report.test.cjs",
+    "client/scripts/android-runtime/tests/matrix-completeness.test.cjs",
+    "client/scripts/android-runtime/tests/traceability-completeness.test.cjs",
+    "client/scripts/android-runtime/tests/evidence-finalization.test.cjs",
+    "client/scripts/android-runtime/tests/verdict-calculation.test.cjs"
+  ],
+  "newGeneratedPlaceholderFiles": [
+    "client/scripts/compiled-policy/.gitkeep",
+    "client/android/app/src/emulatorRuntime/res/raw/.gitkeep",
+    "client/scripts/android-runtime/certs/.gitkeep"
+  ],
+  "newDeliverableDocuments": [
+    "MILESTONE_4_PHASE_2E_BASELINE.md",
+    "MILESTONE_4_RELEASE_TRANSPORT_ARCHITECTURE.md",
+    "MILESTONE_4_PRODUCTION_BUILD_SECURITY_GATE.md",
+    "MILESTONE_4_PHASE_2E_RUNTIME_EVIDENCE_LEDGER.md",
+    "MILESTONE_4_PHASE_2E_HOSTILE_RUNTIME_MATRIX.md",
+    "MILESTONE_4_PHASE_2E_STRESS_TEST_REPORT.md",
+    "MILESTONE_4_PHASE_2E_RELEASE_ARTIFACT_AUDIT.md",
+    "MILESTONE_4_PHASE_2E_COMPLETION_REPORT.md"
+  ],
+  "modifiedProductionFiles": [
+    "client/package.json",
+    "client/capacitor.config.ts",
+    "client/vite.config.ts",
+    "client/src/services/api.ts",
+    "client/src/services/socket.ts",
+    "client/src/features/chat/ChatWindow.tsx",
+    "server/src/utils/auth.ts",
+    "client/android/app/build.gradle"
+  ],
+  "modifiedDeliverableDocuments": [
+    "MILESTONE_4_PHASE_2D_RELEASE_SECURITY_AUDIT.md",
+    "MILESTONE_4_PHASE_2D_COMPLETION_REPORT.md",
+    "MILESTONE_4_PHASE_2D_RUNTIME_EVIDENCE_LEDGER.md",
+    "MILESTONE_4_PHASE_2C_HOSTILE_RUNTIME_MATRIX.md",
+    "MILESTONE_4_REAL_DEVICE_EVIDENCE_MATRIX.md",
+    "MILESTONE_4_NATIVE_RUNTIME_VERIFICATION_REPORT.md"
+  ]
+}

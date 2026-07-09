@@ -173,9 +173,8 @@ export class CryptoService {
 
   // ── File Encryption (AES-GCM) ───────────────────────────────────────────────
   
-  static async encryptFile(file: File): Promise<{ encryptedBlob: Blob, fileKeyBase64: string, ivBase64: string }> {
+  static async encryptFile(file: File): Promise<{ encryptedBlob: Blob, fileKey: CryptoKey, ivBase64: string }> {
     const fileKey = await this.generateRoomKey(); 
-    const fileKeyBase64 = await this.exportRoomKey(fileKey);
     const iv = window.crypto.getRandomValues(new Uint8Array(12));
     
     const arrayBuffer = await file.arrayBuffer();
@@ -188,13 +187,20 @@ export class CryptoService {
     
     return {
       encryptedBlob: new Blob([ciphertextBuffer], { type: 'application/octet-stream' }),
-      fileKeyBase64,
+      fileKey,
       ivBase64: this.bufferToBase64(iv.buffer)
     };
   }
 
-  static async decryptFile(encryptedBlob: Blob, fileKeyBase64: string, ivBase64: string, mimeType: string): Promise<string> {
-    const fileKey = await this.importRoomKey(fileKeyBase64);
+  static async decryptFile(
+    encryptedBlob: Blob,
+    fileKeyOrBase64: CryptoKey | string,
+    ivBase64: string,
+    mimeType: string
+  ): Promise<string> {
+    const fileKey = typeof fileKeyOrBase64 === 'string'
+      ? await this.importRoomKey(fileKeyOrBase64)
+      : fileKeyOrBase64;
     const iv = new Uint8Array(this.stringToArrayBuffer(window.atob(ivBase64)));
     const arrayBuffer = await encryptedBlob.arrayBuffer();
     
@@ -206,6 +212,68 @@ export class CryptoService {
     
     const decryptedBlob = new Blob([decryptedBuffer], { type: mimeType });
     return URL.createObjectURL(decryptedBlob);
+  }
+
+  // ── Key Wrapping (AES-GCM with context bound additionalData) ────────────────
+
+  static async wrapMediaKey(
+    mediaKey: CryptoKey,
+    roomKey: CryptoKey,
+    context: { roomId: string; clientMsgId: string; encryptionVersion: 2 }
+  ): Promise<{ wrappedKey: string; wrapIv: string }> {
+    const rawMediaKey = await window.crypto.subtle.exportKey('raw', mediaKey);
+    const wrapIv = window.crypto.getRandomValues(new Uint8Array(12));
+    
+    const additionalDataText = `${context.encryptionVersion}:${context.roomId}:${context.clientMsgId}`;
+    const additionalData = new TextEncoder().encode(additionalDataText);
+
+    const wrappedBuffer = await window.crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv: wrapIv, additionalData },
+      roomKey,
+      rawMediaKey
+    );
+
+    // Securely clear raw bytes array
+    const rawBytesArray = new Uint8Array(rawMediaKey);
+    rawBytesArray.fill(0);
+
+    return {
+      wrappedKey: this.bufferToBase64(wrappedBuffer),
+      wrapIv: this.bufferToBase64(wrapIv.buffer)
+    };
+  }
+
+  static async unwrapMediaKey(
+    wrappedKeyBase64: string,
+    wrapIvBase64: string,
+    roomKey: CryptoKey,
+    context: { roomId: string; clientMsgId: string; encryptionVersion: 2 }
+  ): Promise<CryptoKey> {
+    const wrapIv = new Uint8Array(this.stringToArrayBuffer(window.atob(wrapIvBase64)));
+    const ciphertext = this.stringToArrayBuffer(window.atob(wrappedKeyBase64));
+
+    const additionalDataText = `${context.encryptionVersion}:${context.roomId}:${context.clientMsgId}`;
+    const additionalData = new TextEncoder().encode(additionalDataText);
+
+    const decryptedBuffer = await window.crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: wrapIv, additionalData },
+      roomKey,
+      ciphertext
+    );
+
+    const rawKey = new Uint8Array(decryptedBuffer);
+    const importedKey = await window.crypto.subtle.importKey(
+      'raw',
+      rawKey.buffer,
+      AES_ALGO,
+      true,
+      ['encrypt', 'decrypt']
+    );
+
+    // Clear key material bytes
+    rawKey.fill(0);
+
+    return importedKey;
   }
 
   // ── Utils ───────────────────────────────────────────────────────────────────

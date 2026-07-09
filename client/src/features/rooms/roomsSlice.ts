@@ -59,20 +59,41 @@ const roomsSlice = createSlice({
       state.rooms = mergedRooms;
 
       if (state.currentRoom) {
-        const fresh = mergedRooms.find(r => r.roomId === state.currentRoom!.roomId);
-        if (fresh) {
-          state.currentRoom = {
-            ...state.currentRoom,
-            ...fresh
-          };
+        const updatedCurrent = state.rooms.find(r => r.roomId === state.currentRoom?.roomId);
+        if (updatedCurrent) {
+          state.currentRoom = updatedCurrent;
         }
+      }
+    },
+    updateRoom: (state, action: PayloadAction<any>) => {
+      const index = state.rooms.findIndex(r => r.roomId === action.payload.roomId);
+      if (index !== -1) {
+        state.rooms[index] = { ...state.rooms[index], ...action.payload };
+        if (state.currentRoom?.roomId === action.payload.roomId) {
+          state.currentRoom = state.rooms[index];
+        }
+      } else {
+        state.rooms.push(action.payload as Room);
+      }
+    },
+    removeRoom: (state, action: PayloadAction<string>) => {
+      state.rooms = state.rooms.filter(r => r.roomId !== action.payload);
+      if (state.currentRoom?.roomId === action.payload) {
+        state.currentRoom = null;
       }
     },
     setCurrentRoom: (state, action: PayloadAction<Room | null>) => {
       state.currentRoom = action.payload;
     },
     addRoom: (state, action: PayloadAction<Room>) => {
-      state.rooms.unshift(action.payload);
+      const exists = state.rooms.some(r => r.roomId === action.payload.roomId);
+      if (!exists) {
+        state.rooms.unshift(action.payload);
+      }
+    },
+    clearRooms: (state) => {
+      state.rooms = [];
+      state.currentRoom = null;
     },
     setLoading: (state, action: PayloadAction<boolean>) => {
       state.loading = action.payload;
@@ -125,5 +146,18 @@ const roomsSlice = createSlice({
   },
 });
 
-export const { setRooms, setCurrentRoom, addRoom, setLoading, setError, updateRoomPreview, clearUnreadCount, updatePresence, updatePinnedMessages } = roomsSlice.actions;
+export const { 
+  setRooms, 
+  updateRoom,
+  removeRoom,
+  setCurrentRoom,
+  addRoom,
+  setLoading, 
+  setError, 
+  clearRooms,
+  updateRoomPreview,
+  updatePresence,
+  clearUnreadCount
+} = roomsSlice.actions;
+
 export default roomsSlice.reducer;

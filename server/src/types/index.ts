@@ -30,6 +30,7 @@ export interface UserPublic {
 
   // Crypto (E2EE)
   publicKey?: string;
+  identityVersion?: number;
   encryptedPrivateKey?: {
     ciphertext: string;
     iv: string;

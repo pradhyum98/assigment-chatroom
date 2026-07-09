@@ -1,6 +1,10 @@
 import { Server, Socket } from 'socket.io';
-import { v4 as uuidv4 } from 'uuid';
+import crypto from 'crypto';
+const uuidv4 = () => crypto.randomUUID();
 import mongoose from 'mongoose';
+import { getIo } from '../socket';
+import { MessageService } from '../services/MessageService';
+import { initSocketRevocationService } from '../services/SocketRevocationService';
 import { z } from 'zod';
 import { Message } from '../models/Message';
 import { ChatRoom } from '../models/ChatRoom';
@@ -16,21 +20,26 @@ const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[
 // ─── Zod schemas for incoming socket payloads ─────────────────────────────────
 
 const incomingMessageSchema = z.object({
-  roomId:        z.string().regex(uuidRegex, 'Invalid Room ID UUID format'),
-  senderId:      z.string().refine((id) => mongoose.Types.ObjectId.isValid(id), 'Invalid Sender ObjectId format'),
-  senderName:    z.string().min(1).max(100),
-  content:       z.string().max(10000, 'Message is too long (max 10000 chars)').optional().default(''),
-  iv:            z.string().optional(),
-  replyTo:       z.string().optional(), // ObjectId of message being replied to
-  clientMsgId:   z.string().optional(), // Client-side temporary ID for optimistic updates
-  type:          z.enum(['text', 'image', 'video', 'audio', 'file', 'voice']).optional().default('text'),
-  mediaUrl:      z.string().optional(),
-  mediaFilename: z.string().optional(),
-  mediaMimeType: z.string().optional(),
-  mediaSize:     z.number().optional(),
-  thumbnailUrl:  z.string().optional(),
-  mediaKey:      z.string().optional(),
-  mediaIv:       z.string().optional(),
+  roomId:            z.string().regex(uuidRegex, 'Invalid Room ID UUID format'),
+  senderId:          z.string().refine((id) => mongoose.Types.ObjectId.isValid(id), 'Invalid Sender ObjectId format'),
+  senderName:        z.string().min(1).max(100),
+  content:           z.string().max(10000, 'Message is too long (max 10000 chars)').optional().default(''),
+  iv:                z.string().optional(),
+  replyTo:           z.string().optional(), // ObjectId of message being replied to
+  clientMsgId:       z.string().regex(uuidRegex, 'Invalid clientMsgId UUID format'), // Required UUID
+  type:              z.enum(['text', 'image', 'video', 'audio', 'file', 'voice']).optional().default('text'),
+  mediaUrl:          z.string().optional(),
+  mediaFilename:     z.string().optional(),
+  mediaMimeType:     z.string().optional(),
+  mediaSize:         z.number().optional(),
+  thumbnailUrl:      z.string().optional(),
+  mediaKey:          z.string().optional(),
+  mediaIv:           z.string().optional(),
+  encryptionVersion: z.number().optional().default(1),
+  wrappedMediaKey:   z.string().optional(),
+  mediaKeyIv:        z.string().optional(),
+  roomKeyVersion:    z.number().optional(),
+  senderIdentityVersion: z.number().optional().default(1),
 }).refine((data) => {
   if (data.type === 'text' && (!data.content || data.content.trim().length === 0)) {
     return false;
@@ -132,6 +141,9 @@ function sanitizeContent(raw: string): string {
 // ─── Main setup ───────────────────────────────────────────────────────────────
 
 export const setupSocketHandlers = (io: Server) => {
+  // Initialize SocketRevocationService with the shared userSockets map
+  // so controllers can revoke sessions without importing socket internals.
+  initSocketRevocationService(userSockets);
 
   // ── Connection-level JWT middleware ────────────────────────────────────────
   io.use(async (socket: Socket, next) => {
@@ -171,7 +183,8 @@ export const setupSocketHandlers = (io: Server) => {
     }
     userSockets.get(userId)!.add(socket);
 
-    // Mark user online, auto-join all their rooms, and broadcast presence
+    // Mark user online, auto-join all their rooms and their personal room, and broadcast presence
+    socket.join(userId);
     await User.updateOne({ _id: user._id }, { isOnline: true, lastSeen: new Date() });
     const userRooms = await ChatRoom.find({ participants: user._id }, { roomId: 1 }).lean();
     userRooms.forEach(({ roomId }) => {
@@ -204,11 +217,20 @@ export const setupSocketHandlers = (io: Server) => {
     });
 
     // ── send_message ─────────────────────────────────────────────────────────
-    socket.on('send_message', async (payload: any) => {
+    socket.on('send_message', async (payload: any, callback?: any) => {
       try {
         const { success, data, error } = incomingMessageSchema.safeParse(payload);
         if (!success) {
-          socket.emit('socket_error', { message: 'Invalid payload.' });
+          if (callback && typeof callback === 'function') {
+            callback({
+              ok: false,
+              clientMsgId: payload?.clientMsgId || '',
+              errorCode: 'INVALID_PAYLOAD',
+              retryable: false
+            });
+          } else {
+            socket.emit('socket_error', { message: 'Invalid payload.' });
+          }
           return;
         }
 
@@ -228,107 +250,91 @@ export const setupSocketHandlers = (io: Server) => {
           thumbnailUrl,
           mediaKey,
           mediaIv,
+          encryptionVersion,
+          wrappedMediaKey,
+          mediaKeyIv,
+          roomKeyVersion,
+          senderIdentityVersion,
         } = data;
-
-        const room = await getRoomAndVerifyMembership(roomId, userId);
-        if (!room) {
-          auditLog.authorizationFailure(user.email, 'send_message', roomId);
-          socket.emit('socket_error', { message: 'Room not found.' });
+        // Sender-ID spoofing guard: payload senderId must match authenticated session userId
+        if (senderId && senderId !== userId) {
+          if (callback && typeof callback === 'function') {
+            callback({ ok: false, clientMsgId, errorCode: 'FORBIDDEN', retryable: false });
+          }
           return;
         }
+        try {
+          const { result: message, publishedEvents } = await MessageService.createMessage(
+            {
+              clientMsgId,
+              roomId,
+              senderId: userId,
+              senderName,
+              senderIdentityVersion: senderIdentityVersion || 0,
+              roomKeyVersion: roomKeyVersion || 1,
+              type,
+              content,
+              iv,
+              replyTo,
+              encryptionVersion,
+              wrappedMediaKey,
+              mediaKeyIv,
+              mediaUrl,
+              mediaFilename,
+              mediaMimeType,
+              mediaSize,
+              thumbnailUrl,
+              mediaKey,
+              mediaIv,
+            },
+            { email: user.email }
+          );
 
-        // Prevent sender-ID spoofing
-        if (senderId !== userId) {
-          auditLog.authorizationFailure(user.email, 'send_message_spoof', roomId);
-          socket.emit('socket_error', { message: 'Action not allowed.' });
-          return;
-        }
-
-        // Sanitize
-        const sanitizedContent = content ? sanitizeContent(content) : '';
-
-        // Validate replyTo if provided
-        let replyToId: mongoose.Types.ObjectId | undefined;
-        if (replyTo) {
-          let referenced = null;
-          if (mongoose.Types.ObjectId.isValid(replyTo)) {
-            referenced = await Message.findById(replyTo).lean();
-          } else {
-            referenced = await Message.findOne({ messageId: replyTo }).lean();
-          }
-          if (referenced && referenced.roomId === roomId) {
-            replyToId = referenced._id as mongoose.Types.ObjectId;
-          }
-        }
-
-        // Persist message
-        const message = await Message.create({
-          messageId:   uuidv4(),
-          senderId,
-          senderName,
-          roomId,
-          type,
-          content:     sanitizedContent,
-          iv,
-          timestamp:   new Date(),
-          replyTo:     replyToId,
-          reactions:   [],
-          deliveredTo: [],
-          readBy:      [],
-          mediaUrl,
-          mediaFilename,
-          mediaMimeType,
-          mediaSize,
-          thumbnailUrl,
-          mediaKey,
-          mediaIv,
-        });
-
-        // Populate replyTo for broadcast
-        const populated = await message.populate('replyTo', 'messageId senderId senderName content type');
-
-        // Broadcast to all room members
-        io.to(roomId).emit('message_received', { ...populated.toObject(), clientMsgId });
-
-        // Update room preview and lastMessage
-        let previewText = sanitizedContent;
-        if (type !== 'text') {
-          previewText = `[Attachment: ${type}]`;
-        }
-
-        ChatRoom.updateOne(
-          { roomId },
-          {
-            previewText,
-            lastMessage: message._id,
-            updatedAt:   new Date(),
-          }
-        ).catch((err) => logger.error('Failed to update room preview:', err));
-
-        // Increment unread counts for all participants EXCEPT the sender
-        const otherParticipants = room.participants
-          .map((p) => p.toString())
-          .filter((pid) => pid !== userId);
-
-        const unreadIncrements: Record<string, number> = {};
-        otherParticipants.forEach((pid) => {
-          unreadIncrements[`unreadCounts.${pid}`] = 1;
-
-          // Dispatch push notification if user is offline
-          if (!userSockets.has(pid)) {
-            sendNotificationToUser(pid, {
-              title: `New message from ${senderName}`,
-              body: type === 'text' ? sanitizedContent : `[${type} attachment]`,
+          // We don't need to manually broadcast or update preview here because RoomEventService handles it
+          // BUT RoomEventService broadcasts 'room_event', whereas client currently expects 'message_received'
+          // Wait, the new architecture uses RoomEvent for everything, so 'room_event' is correct.
+          // But for backward compatibility with clients that aren't fully migrated, maybe emit both?
+          // For now, the RoomEventService emits 'room_event'. 
+          
+          if (callback && typeof callback === 'function') {
+            callback({
+              ok: true,
+              clientMsgId,
+              message: message.toObject()
             });
           }
-        });
-        if (Object.keys(unreadIncrements).length > 0) {
-          ChatRoom.updateOne({ roomId }, { $inc: unreadIncrements })
-            .catch((err) => logger.error('Failed to increment unread counts:', err));
+        } catch (err: any) {
+          if (err.message === 'NOT_MEMBER') {
+            if (callback && typeof callback === 'function') {
+              callback({ ok: false, clientMsgId, errorCode: 'NOT_MEMBER', retryable: false });
+            } else { socket.emit('socket_error', { message: 'Room not found.' }); }
+          } else if (err.message === 'ROTATION_REQUIRED') {
+            if (callback && typeof callback === 'function') {
+              callback({ ok: false, clientMsgId, errorCode: 'ROTATION_REQUIRED', retryable: false });
+            } else { socket.emit('socket_error', { message: 'Key rotation required.' }); }
+          } else if (err.message === 'STALE_IDENTITY') {
+            if (callback && typeof callback === 'function') {
+              callback({ ok: false, clientMsgId, errorCode: 'STALE_IDENTITY', retryable: false });
+            } else { socket.emit('socket_error', { message: 'Stale identity version.' }); }
+          } else if (err.message === 'STALE_ROOM_KEY') {
+            if (callback && typeof callback === 'function') {
+              callback({ ok: false, clientMsgId, errorCode: 'STALE_ROOM_KEY', retryable: false });
+            } else { socket.emit('socket_error', { message: 'Stale room key version.' }); }
+          } else {
+            logger.error(`Error sending message [${roomId}]:`, err);
+            socket.emit('socket_error', { message: 'Failed to send message.' });
+          }
         }
-
-      } catch (err) {
+      } catch (err: any) {
         logger.error('Failed to process socket message:', err);
+        if (callback && typeof callback === 'function') {
+          callback({
+            ok: false,
+            clientMsgId: payload?.clientMsgId || '',
+            errorCode: 'SERVER_ERROR',
+            retryable: true
+          });
+        }
       }
     });
 
@@ -363,57 +369,15 @@ export const setupSocketHandlers = (io: Server) => {
         const room = await getRoomAndVerifyMembership(roomId, userId);
         if (!room) return;
 
-        const userObjectId = new mongoose.Types.ObjectId(userId);
-        const now = new Date();
-
-        const readObjectIds: mongoose.Types.ObjectId[] = [];
-        const readUuids: string[] = [];
-        for (const id of messageIds) {
-          if (mongoose.Types.ObjectId.isValid(id)) {
-            readObjectIds.push(new mongoose.Types.ObjectId(id));
-          } else {
-            readUuids.push(id);
-          }
-        }
-
-        const readQuery: any = {
-          roomId,
-          'readBy.userId': { $ne: userObjectId },
-          $or: []
-        };
-
-        if (readObjectIds.length > 0) {
-          readQuery.$or.push({ _id: { $in: readObjectIds } });
-        }
-        if (readUuids.length > 0) {
-          readQuery.$or.push({ messageId: { $in: readUuids } });
-        }
-
-        if (readQuery.$or.length === 0) {
-          readQuery.messageId = { $in: [] };
-          delete readQuery.$or;
-        } else if (readQuery.$or.length === 1) {
-          const singleCond = readQuery.$or[0];
-          Object.assign(readQuery, singleCond);
-          delete readQuery.$or;
-        }
-
-        // Bulk update: add read receipt only if not already present
-        await Message.updateMany(
-          readQuery,
+        await MessageService.markMessagesRead(
           {
-            $push: { readBy: { userId: userObjectId, readAt: now } },
-          }
+            roomId,
+            senderId: userId,
+            messageIds,
+            mutationId: uuidv4() // In a real app, client should provide this for idempotency
+          },
+          { email: user.email }
         );
-
-        // Reset unread count for this user in this room
-        await ChatRoom.updateOne(
-          { roomId },
-          { $set: { [`unreadCounts.${userId}`]: 0 } }
-        );
-
-        // Notify room of read update
-        io.to(roomId).emit('messages_read', { roomId, userId, messageIds, readAt: now });
 
       } catch (err) {
         logger.error('Failed to process mark_read:', err);
@@ -430,50 +394,15 @@ export const setupSocketHandlers = (io: Server) => {
         const room = await getRoomAndVerifyMembership(roomId, userId);
         if (!room) return;
 
-        const userObjectId = new mongoose.Types.ObjectId(userId);
-        const now = new Date();
-
-        const delObjectIds: mongoose.Types.ObjectId[] = [];
-        const delUuids: string[] = [];
-        for (const id of messageIds) {
-          if (mongoose.Types.ObjectId.isValid(id)) {
-            delObjectIds.push(new mongoose.Types.ObjectId(id));
-          } else {
-            delUuids.push(id);
-          }
-        }
-
-        const delQuery: any = {
-          roomId,
-          'deliveredTo.userId': { $ne: userObjectId },
-          $or: []
-        };
-
-        if (delObjectIds.length > 0) {
-          delQuery.$or.push({ _id: { $in: delObjectIds } });
-        }
-        if (delUuids.length > 0) {
-          delQuery.$or.push({ messageId: { $in: delUuids } });
-        }
-
-        if (delQuery.$or.length === 0) {
-          delQuery.messageId = { $in: [] };
-          delete delQuery.$or;
-        } else if (delQuery.$or.length === 1) {
-          const singleCond = delQuery.$or[0];
-          Object.assign(delQuery, singleCond);
-          delete delQuery.$or;
-        }
-
-        await Message.updateMany(
-          delQuery,
+        await MessageService.markMessagesDelivered(
           {
-            $push: { deliveredTo: { userId: userObjectId, deliveredAt: now } },
-          }
+            roomId,
+            senderId: userId,
+            messageIds,
+            mutationId: uuidv4()
+          },
+          { email: user.email }
         );
-
-        io.to(roomId).emit('messages_delivered', { roomId, userId, messageIds, deliveredAt: now });
-
       } catch (err) {
         logger.error('Failed to process mark_delivered:', err);
       }
@@ -489,37 +418,15 @@ export const setupSocketHandlers = (io: Server) => {
         }
 
         const { messageId, roomId, emoji } = data;
-        const room = await getRoomAndVerifyMembership(roomId, userId);
-        if (!room) {
-          socket.emit('socket_error', { message: 'Room not found.' });
-          return;
-        }
-
-        const msg = mongoose.Types.ObjectId.isValid(messageId)
-          ? await Message.findById(messageId)
-          : await Message.findOne({ messageId });
-        if (!msg || msg.roomId !== roomId) {
-          socket.emit('socket_error', { message: 'Message not found.' });
-          return;
-        }
-
-        const userObjectId = new mongoose.Types.ObjectId(userId);
-        const existingIdx = msg.reactions.findIndex(
-          (r) => r.userId.toString() === userId && r.emoji === emoji
+        await MessageService.reactToMessage(
+          {
+            messageId,
+            senderId: userId,
+            emoji,
+            mutationId: uuidv4()
+          },
+          { email: user.email }
         );
-
-        if (existingIdx !== -1) {
-          msg.reactions.splice(existingIdx, 1);
-        } else {
-          msg.reactions.push({ emoji, userId: userObjectId, createdAt: new Date() });
-        }
-        await msg.save();
-
-        io.to(roomId).emit('reaction_updated', {
-          messageId:   msg.messageId || msg._id.toString(),
-          reactions:   msg.reactions,
-          updatedBy:   userId,
-        });
 
       } catch (err) {
         logger.error('Failed to process react_message:', err);
@@ -536,49 +443,15 @@ export const setupSocketHandlers = (io: Server) => {
         }
 
         const { messageId, roomId, content, iv } = data;
-        const room = await getRoomAndVerifyMembership(roomId, userId);
-        if (!room) {
-          socket.emit('socket_error', { message: 'Room not found.' });
-          return;
-        }
-
-        const msg = mongoose.Types.ObjectId.isValid(messageId)
-          ? await Message.findById(messageId)
-          : await Message.findOne({ messageId });
-        if (!msg || msg.roomId !== roomId) {
-          socket.emit('socket_error', { message: 'Message not found.' });
-          return;
-        }
-        if (msg.type !== 'text') {
-          socket.emit('socket_error', { message: 'Only text messages can be edited.' });
-          return;
-        }
-        if (msg.senderId.toString() !== userId) {
-          auditLog.authorizationFailure(user.email, 'edit_message', messageId);
-          socket.emit('socket_error', { message: 'You can only edit your own messages.' });
-          return;
-        }
-
-        const ageMs = Date.now() - new Date(msg.timestamp).getTime();
-        if (ageMs > EDIT_WINDOW_MS) {
-          socket.emit('socket_error', { message: 'Edit window expired.' });
-          return;
-        }
-
-        msg.content  = sanitizeContent(content);
-        if (iv) {
-          msg.iv = iv;
-        }
-        msg.editedAt = new Date();
-        await msg.save();
-
-        io.to(roomId).emit('message_edited', {
-          messageId:   msg.messageId || msg._id.toString(),
-          content:     msg.content,
-          iv:          msg.iv,
-          editedAt:    msg.editedAt,
-          roomId,
-        });
+        await MessageService.editMessage(
+          {
+            messageId,
+            senderId: userId,
+            content,
+            mutationId: uuidv4()
+          },
+          { email: user.email }
+        );
 
       } catch (err) {
         logger.error('Failed to process edit_message:', err);
@@ -595,71 +468,20 @@ export const setupSocketHandlers = (io: Server) => {
         }
 
         const { messageId, roomId, deleteForEveryone } = data;
-        const room = await getRoomAndVerifyMembership(roomId, userId);
-        if (!room) {
-          socket.emit('socket_error', { message: 'Room not found.' });
+        // We only support deleteForEveryone in the new canonical architecture
+        if (!deleteForEveryone) {
+          socket.emit('socket_error', { message: 'Only deleteForEveryone is supported.' });
           return;
         }
 
-        const msg = mongoose.Types.ObjectId.isValid(messageId)
-          ? await Message.findById(messageId)
-          : await Message.findOne({ messageId });
-        if (!msg || msg.roomId !== roomId) {
-          socket.emit('socket_error', { message: 'Message not found.' });
-          return;
-        }
-
-        if (deleteForEveryone) {
-          if (msg.senderId.toString() !== userId) {
-            auditLog.authorizationFailure(user.email, 'delete_message_everyone', messageId);
-            socket.emit('socket_error', { message: 'Only the sender can delete for everyone.' });
-            return;
-          }
-          const ageMs = Date.now() - new Date(msg.timestamp).getTime();
-          if (ageMs > EDIT_WINDOW_MS) {
-            socket.emit('socket_error', { message: 'Delete-for-everyone window expired.' });
-            return;
-          }
-          msg.deletedForEveryone = true;
-          msg.content            = '';
-          
-          // Clean up physical file if it exists and no other message is using it
-          if (msg.mediaUrl) {
-            try {
-              const fs = require('fs');
-              const path = require('path');
-              // Prevent IDOR by checking if any other message still references this media URL
-              const inUseCount = await Message.countDocuments({ mediaUrl: msg.mediaUrl });
-              if (inUseCount <= 1) {
-                // Safely extract just the filename to prevent directory traversal
-                const urlObj = new URL(msg.mediaUrl, 'http://localhost');
-                const filename = path.basename(decodeURIComponent(urlObj.pathname));
-                
-                if (filename && !filename.includes('..') && !filename.includes('/') && !filename.includes('\\')) {
-                  const filePath = path.resolve(__dirname, '../../uploads', filename);
-                  const uploadsDir = path.resolve(__dirname, '../../uploads');
-                  
-                  if (filePath.startsWith(uploadsDir) && filePath !== uploadsDir) {
-                    if (fs.existsSync(filePath)) {
-                      fs.unlinkSync(filePath);
-                    }
-                  }
-                }
-              }
-            } catch (err) {
-              logger.error('Failed to delete physical file during message deletion:', err);
-            }
-          }
-        }
-
-        msg.deletedAt = new Date();
-        await msg.save();
-
-        if (deleteForEveryone) {
-          io.to(roomId).emit('message_deleted', { messageId: msg.messageId || msg._id.toString(), roomId, deletedForEveryone: true });
-        } else {
-          socket.emit('message_deleted', { messageId: msg.messageId || msg._id.toString(), roomId, deletedForEveryone: false });
-        }
+        await MessageService.deleteMessage(
+          {
+            messageId,
+            senderId: userId,
+            mutationId: uuidv4()
+          },
+          { email: user.email }
+        );
 
       } catch (err) {
         logger.error('Failed to process delete_message:', err);

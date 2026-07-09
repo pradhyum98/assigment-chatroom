@@ -1,14 +1,15 @@
 import React, { useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { useAppSelector } from './store/hooks';
+import { useAppSelector, useAppDispatch } from './store/hooks';
 import LoginPage from './features/auth/LoginPage';
 import SignupPage from './features/auth/SignupPage';
 import ChatRoom from './features/chat/ChatRoom';
 import { CallProvider } from './features/calls/CallContext';
 import './index.css';
 import { subscribeToPushNotifications } from './services/pushNotifications';
-
-import { syncManager } from './services/syncManager';
+import { loginSuccess, logout, loginFailure } from './features/auth/authSlice';
+import api, { setAccessToken } from './services/api';
+import { syncEngine } from './services/SyncEngine';
 
 const ProtectedRoute: React.FC<{ children: React.ReactElement }> = ({ children }) => {
   const { isAuthenticated, loading } = useAppSelector((state) => state.auth);
@@ -25,14 +26,103 @@ const ProtectedRoute: React.FC<{ children: React.ReactElement }> = ({ children }
 };
 
 const App: React.FC = () => {
+  const dispatch = useAppDispatch();
   const { token } = useAppSelector((state) => state.auth);
+  const currentRoom = useAppSelector((state) => state.rooms.currentRoom);
+  const currentRoomRef = React.useRef(currentRoom);
 
   useEffect(() => {
-    if (!token) return;
+    currentRoomRef.current = currentRoom;
+  }, [currentRoom]);
 
-    syncManager.bootstrap();
+  // Clean up any legacy plaintext keys from localStorage on startup
+  useEffect(() => {
+    const cleanLegacyKeys = () => {
+      localStorage.removeItem('e2e_private_key');
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k?.startsWith('room_key_')) {
+          keysToRemove.push(k);
+        }
+      }
+      keysToRemove.forEach(k => localStorage.removeItem(k));
+    };
+    cleanLegacyKeys();
+  }, []);
+
+  // Listen to native Android Back Button to prevent accidental logouts
+  useEffect(() => {
+    let listenerPromise: Promise<any> | null = null;
+    
+    import('@capacitor/app').then(({ App: CapApp }) => {
+      listenerPromise = CapApp.addListener('backButton', (data) => {
+        const path = window.location.pathname;
+        if (path === '/' || path === '/login' || path === '/signup' || !data.canGoBack) {
+          if (path === '/' && currentRoomRef.current) {
+            import('./features/rooms/roomsSlice').then(({ setCurrentRoom }) => {
+              dispatch(setCurrentRoom(null));
+            });
+          } else {
+            CapApp.exitApp();
+          }
+        } else {
+          window.history.back();
+        }
+      });
+    });
+
+    return () => {
+      if (listenerPromise) {
+        listenerPromise.then((l) => l.remove());
+      }
+    };
+  }, []);
+
+  // Keep a module-level promise to deduplicate concurrent bootstrap requests (e.g. from React StrictMode double mounts)
+  let bootstrapPromise: Promise<void> | null = null;
+
+  // Bootstrap session via silent refresh on initial mount
+  useEffect(() => {
+    const bootstrapSession = async () => {
+      const hasSession = localStorage.getItem('hasSession') === 'true';
+      if (hasSession && !token) {
+        if (bootstrapPromise) {
+          return;
+        }
+        bootstrapPromise = (async () => {
+          try {
+            console.log('[App] Attempting silent refresh bootstrap...');
+            const response = await api.post('/auth/refresh');
+            const { token: newToken, user } = response.data.data;
+            setAccessToken(newToken);
+            dispatch(loginSuccess({ user, token: newToken }));
+          } catch (err) {
+            console.error('[App] Bootstrap silent refresh failed:', err);
+            setAccessToken(null);
+            dispatch(logout());
+          } finally {
+            bootstrapPromise = null;
+          }
+        })();
+        await bootstrapPromise;
+      } else if (!hasSession) {
+        // Stop the loading spinner since we are not authenticated
+        dispatch(loginFailure(''));
+      }
+    };
+
+    bootstrapSession();
+  }, [dispatch, token]);
+
+  const user = useAppSelector((state) => state.auth.user);
+
+  useEffect(() => {
+    if (user && user._id) {
+      syncEngine.init(user._id);
+    }
     subscribeToPushNotifications();
-  }, [token]);
+  }, [user, token]);
 
   return (
     <Router>

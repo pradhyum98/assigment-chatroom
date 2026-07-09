@@ -58,11 +58,11 @@
 }
 
 .chat-header {
-  height: var(--header-height);
+  height: calc(var(--header-height) + env(safe-area-inset-top, 0px));
   background-color: #FFFFFF;
   display: flex;
   align-items: center;
-  padding: 0 40px;
+  padding: env(safe-area-inset-top, 0px) 40px 0 40px;
   border-bottom: 1px solid #F1F5F9;
   justify-content: space-between;
   z-index: 5;
@@ -757,8 +757,8 @@
 
   /* Chat header adjustments */
   .chat-header {
-    padding: 0 16px;
-    height: 60px;
+    padding: env(safe-area-inset-top, 0px) 16px 0 16px;
+    height: calc(60px + env(safe-area-inset-top, 0px));
   }
 
   .chat-user-info {

@@ -22,27 +22,17 @@ router.get('/preview', getLinkPreview);
 router.post('/:roomId/pin/:messageId', validateUuid('roomId'), validateObjectId('messageId'), async (req, res, next) => {
   try {
     const { roomId, messageId } = req.params;
-    const { ChatRoom } = await import('../models/ChatRoom');
-    const { AppError } = await import('../middleware/errorHandler');
-
-    const room = await ChatRoom.findOne({ roomId });
-    if (!room) throw new AppError('Room not found', 404);
-
-    const isParticipant = room.participants.some(p => p.toString() === req.user!._id.toString());
-    if (!isParticipant) throw new AppError('Unauthorized', 403);
-
-    // Toggle pin status
-    const messageObjectId = new (await import('mongoose')).default.Types.ObjectId(messageId);
-    const index = room.pinnedMessages.findIndex(id => id.toString() === messageId);
+    const { result } = await (await import('../services/MessageService')).MessageService.pinMessage(
+      {
+        roomId,
+        senderId: req.user!._id.toString(),
+        messageId,
+        mutationId: (await import('crypto')).randomUUID() // Client should ideally pass this
+      },
+      { email: req.user!.email }
+    );
     
-    if (index > -1) {
-      room.pinnedMessages.splice(index, 1);
-    } else {
-      room.pinnedMessages.push(messageObjectId);
-    }
-    
-    await room.save();
-    res.status(200).json({ success: true, message: index > -1 ? 'Message unpinned' : 'Message pinned', data: { room } });
+    res.status(200).json({ success: true, message: result.action === 'unpinned' ? 'Message unpinned' : 'Message pinned', data: { room: result.room } });
   } catch (error) {
     next(error);
   }

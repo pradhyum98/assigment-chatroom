@@ -1,0 +1,390 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace = "com.securechat.pwa"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.securechat.pwa"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName "1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    signingConfigs {
+        release {
+            def signingPropsFile = file('../signing.properties')
+            if (signingPropsFile.exists()) {
+                def props = new Properties()
+                props.load(new FileInputStream(signingPropsFile))
+                
+                def storeFilePath = props['RELEASE_STORE_FILE']
+                def storePwd = props['RELEASE_STORE_PASSWORD']
+                def alias = props['RELEASE_KEY_ALIAS']
+                def keyPwd = props['RELEASE_KEY_PASSWORD']
+                
+                if (!storeFilePath || !storePwd || !alias || !keyPwd) {
+                    throw new GradleException("Release signing properties are incomplete in signing.properties!")
+                }
+                
+                storeFile file(storeFilePath)
+                storePassword storePwd
+                keyAlias alias
+                keyPassword keyPwd
+            } else {
+                throw new GradleException("Release signing properties file 'signing.properties' is missing!")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}
+
+// ─── Gradle Gate E / Attestation Validation Additions ────────────────────────
+
+import java.security.MessageDigest
+import groovy.json.JsonSlurper
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
+
+def getRepoRoot() {
+    def stdout = new ByteArrayOutputStream()
+    exec {
+        commandLine 'git', 'rev-parse', '--show-toplevel'
+        standardOutput = stdout
+    }
+    return stdout.toString().trim()
+}
+
+class ValidationInputs {
+    String repoRoot
+    String attestationPath
+    String productionConfigPath
+    List<String> policySourceFiles
+    String compiledPolicyPath
+    String capacitorConfigPath
+    String assetTreeRoot
+    String gitCommitSha
+    String expectedApiOrigin
+    String expectedSocketOrigin
+    String expectedMediaOrigin
+    String expectedProfile
+    String expectedScheme
+    String clockSource
+    String timestampPolicy
+    String dirtyWorktreePolicy
+    String detachedHeadPolicy
+    String submodulePolicy
+}
+
+class AttestationValidator {
+    static void validate(ValidationInputs inputs) {
+        def attestFile = new File(inputs.attestationPath)
+        if (!attestFile.exists()) {
+            throw new GradleException("Attestation file missing: ${inputs.attestationPath}")
+        }
+        
+        def json = new JsonSlurper().parse(attestFile)
+        
+        // 1. Structural integrity and strict schema audit
+        def expectedKeys = ["formatVersion", "buildProfile", "apiOrigin", "socketOrigin", "mediaOrigin", "capacitorScheme", "gitCommitSha", "assetTreeHash", "productionConfigHash", "policySourceHash", "compiledPolicyHash", "capacitorConfigHash", "timestampMs"]
+        json.keySet().each { key ->
+            if (!expectedKeys.contains(key)) throw new GradleException("Unknown key: ${key}")
+        }
+        expectedKeys.each { key ->
+            if (!json.containsKey(key)) throw new GradleException("Missing key: ${key}")
+        }
+        
+        if (!(json.timestampMs instanceof Long)) throw new GradleException("Malformed timestampMs type")
+        if (json.formatVersion != 2) throw new GradleException("formatVersion mismatch")
+        if (json.buildProfile != inputs.expectedProfile) throw new GradleException("buildProfile mismatch")
+        if (json.capacitorScheme != inputs.expectedScheme) throw new GradleException("capacitorScheme mismatch")
+        
+        // 2. Canonical Origin Validation
+        validateOrigin(json.apiOrigin, inputs.expectedApiOrigin)
+        validateOrigin(json.socketOrigin, inputs.expectedSocketOrigin)
+        validateOrigin(json.mediaOrigin, inputs.expectedMediaOrigin)
+        
+        // 3. Git Invariant Audits
+        if (!json.gitCommitSha.matches("^[0-9a-f]{40}\$")) {
+            throw new GradleException("Git SHA must be a 40-character hexadecimal string")
+        }
+        if (json.gitCommitSha != inputs.gitCommitSha) {
+            throw new GradleException("Attestation SHA does not match current commit SHA")
+        }
+        
+        // 4. File-Parity Invariant Validation
+        def configHash = computeSha256(new File(inputs.productionConfigPath))
+        if (json.productionConfigHash != configHash) throw new GradleException("Config hash mismatch")
+
+        def policyContent = ""
+        inputs.policySourceFiles.each { filePath ->
+            policyContent += new File(filePath).text
+        }
+        def policySourceHash = computeStringSha256(policyContent)
+        if (json.policySourceHash != policySourceHash) throw new GradleException("Policy source hash mismatch")
+
+        def compiledHash = computeSha256(new File(inputs.compiledPolicyPath))
+        if (json.compiledPolicyHash != compiledHash) throw new GradleException("Compiled policy hash mismatch")
+
+        def capConfigHash = computeSha256(new File(inputs.capacitorConfigPath))
+        if (json.capacitorConfigHash != capConfigHash) throw new GradleException("Capacitor config hash mismatch")
+
+        // 5. Canonical Asset-Tree Validation
+        def treeHash = computeAssetTreeHash(new File(inputs.assetTreeRoot))
+        if (json.assetTreeHash != treeHash) throw new GradleException("Asset tree hash mismatch")
+        
+        // 6. Time and Skew checks
+        def currentMs = System.currentTimeMillis()
+        def skew = currentMs - json.timestampMs
+        if (skew < -300000) throw new GradleException("Attestation timestamp is in the future")
+        if (skew > 3600000) throw new GradleException("Attestation timestamp age exceeds 1 hour")
+    }
+
+    private static void validateOrigin(String origin, String expected) {
+        if (origin != expected) throw new GradleException("Origin mismatch. Expected: ${expected}, Got: ${origin}")
+        def uri = new URI(origin)
+        if (uri.scheme != "https") throw new GradleException("Origin must use HTTPS scheme")
+        if (uri.path != null && !uri.path.isEmpty() && uri.path != "/") {
+            throw new GradleException("Origin cannot contain path: ${origin}")
+        }
+        if (uri.query != null) throw new GradleException("Origin cannot contain query: ${origin}")
+    }
+
+    private static String computeSha256(File file) {
+        def digest = MessageDigest.getInstance("SHA-256")
+        file.eachByte(4096) { buffer, length -> digest.update(buffer, 0, length) }
+        return digest.digest().collect { String.format('%02x', it) }.join('')
+    }
+
+    private static String computeStringSha256(String text) {
+        def digest = MessageDigest.getInstance("SHA-256")
+        digest.update(text.getBytes("UTF-8"))
+        return digest.digest().collect { String.format('%02x', it) }.join('')
+    }
+
+    static String computeAssetTreeHash(File rootDir) {
+        def files = []
+        def rootPath = rootDir.toPath()
+        
+        // Walk directory using NOFOLLOW_LINKS
+        Files.walk(rootPath).forEach { Path p ->
+            def file = p.toFile()
+            def relPath = rootPath.relativize(p).toString().replace('\\', '/')
+            if (relPath.isEmpty()) return
+            
+            // Match exclusions
+            if (relPath == 'sync-attestation.json' || relPath.endsWith('.tmp') || relPath.contains('.DS_Store') || relPath == 'cordova.js' || relPath == 'cordova_plugins.js') {
+                return
+            }
+
+            if (Files.isSymbolicLink(p)) {
+                def symTarget = Files.readSymbolicLink(p)
+                def resolvedTarget = p.getParent().resolve(symTarget).normalize()
+                if (!Files.exists(resolvedTarget)) {
+                    throw new GradleException("Dangling symlink encountered: ${relPath}")
+                }
+                if (!resolvedTarget.startsWith(rootPath)) {
+                    throw new GradleException("Symlink target escapes root: ${relPath}")
+                }
+                def targetString = rootPath.relativize(resolvedTarget).toString().replace('\\', '/')
+                files << [path: relPath, targetString: targetString, isSym: true]
+            } else if (file.isFile()) {
+                files << [path: relPath, target: file, isSym: false]
+            }
+        }
+        
+        if (files.isEmpty()) {
+            return "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+        
+        // Lexicographical sort using unsigned bytes
+        files.sort { a, b ->
+            byte[] aBytes = a.path.getBytes("UTF-8")
+            byte[] bBytes = b.path.getBytes("UTF-8")
+            int minLen = Math.min(aBytes.length, bBytes.length)
+            for (int i = 0; i < minLen; i++) {
+                int aVal = aBytes[i] & 0xFF
+                int bVal = bBytes[i] & 0xFF
+                if (aVal != bVal) return aVal - bVal
+            }
+            return aBytes.length - bBytes.length
+        }
+        
+        // Write records to byte stream using strict binary framing
+        def stream = new ByteArrayOutputStream()
+        files.each { entry ->
+            byte[] pathBytes = entry.path.getBytes("UTF-8")
+            if (!entry.isSym) {
+                stream.write(0x01) // Regular file marker
+                stream.write((pathBytes.length >> 8) & 0xFF)
+                stream.write(pathBytes.length & 0xFF)
+                stream.write(pathBytes)
+                
+                def fileBytes = entry.target.bytes
+                def digest = MessageDigest.getInstance("SHA-256")
+                byte[] fileHash = digest.digest(fileBytes)
+                stream.write(fileHash) // 32 bytes binary
+            } else {
+                stream.write(0x02) // Symlink marker
+                stream.write((pathBytes.length >> 8) & 0xFF)
+                stream.write(pathBytes.length & 0xFF)
+                stream.write(pathBytes)
+                
+                byte[] targetBytes = entry.targetString.getBytes("UTF-8")
+                stream.write((targetBytes.length >> 8) & 0xFF)
+                stream.write(targetBytes.length & 0xFF)
+                stream.write(targetBytes)
+            }
+        }
+        
+        def sha256 = MessageDigest.getInstance("SHA-256")
+        return sha256.digest(stream.toByteArray()).collect { String.format('%02x', it) }.join('')
+    }
+}
+
+task verifyProductionReleaseConfig {
+    doLast {
+        def repoRoot = getRepoRoot()
+        def gitSha = "git rev-parse HEAD".execute([], new File(repoRoot)).text.trim()
+        def status = "git status --porcelain".execute([], new File(repoRoot)).text.trim()
+        if (!status.isEmpty()) {
+            def cleanOutsideAndroid = true
+            for (line in status.split("\n")) {
+                if (line.trim().isEmpty()) continue
+                def trimmed = line.trim()
+                def spaceIdx = trimmed.indexOf(' ')
+                def filePart = spaceIdx > 0 ? trimmed.substring(spaceIdx + 1).trim() : trimmed
+                if (!filePart.startsWith("client/android/") && filePart != "client/scripts/cap-gate.cjs") {
+                    cleanOutsideAndroid = false
+                    logger.lifecycle("Dirty file outside android project: ${filePart}")
+                }
+            }
+            if (!cleanOutsideAndroid) {
+                throw new GradleException("Production build blocked: worktree is dirty outside Android native folder")
+            }
+        }
+
+        // Read production origin from signing.properties (PRODUCTION_API_ORIGIN key)
+        def signingPropsFile = file('../signing.properties')
+        def productionApiOrigin = "https://chat.engage.tata.com" // default fallback
+        if (signingPropsFile.exists()) {
+            def signingProps = new Properties()
+            signingProps.load(new FileInputStream(signingPropsFile))
+            def overrideOrigin = signingProps['PRODUCTION_API_ORIGIN']
+            if (overrideOrigin && !overrideOrigin.isEmpty()) {
+                productionApiOrigin = overrideOrigin.trim()
+            }
+        }
+
+        def inputs = new ValidationInputs(
+            repoRoot: repoRoot,
+            attestationPath: "${repoRoot}/client/android/app/src/main/assets/public/sync-attestation.json",
+            productionConfigPath: "${repoRoot}/client/src/config/production-config.json",
+            policySourceFiles: [
+                "${repoRoot}/client/src/config/transport/types.ts",
+                "${repoRoot}/client/src/config/transport/transportPolicy.ts",
+                "${repoRoot}/client/src/config/transport/resolveTransportConfig.ts"
+            ],
+            compiledPolicyPath: "${repoRoot}/client/scripts/compiled-policy/viteTransportAdapter.cjs",
+            capacitorConfigPath: "${repoRoot}/client/capacitor.config.ts",
+            assetTreeRoot: "${repoRoot}/client/android/app/src/main/assets/public",
+            gitCommitSha: gitSha,
+            expectedApiOrigin: productionApiOrigin,
+            expectedSocketOrigin: productionApiOrigin,
+            expectedMediaOrigin: productionApiOrigin,
+            expectedProfile: "production",
+            expectedScheme: "https",
+            clockSource: "SYSTEM_MONOTONIC",
+            timestampPolicy: "VALIDATE_AGE",
+            dirtyWorktreePolicy: "BLOCK",
+            detachedHeadPolicy: "BLOCK",
+            submodulePolicy: "BLOCK"
+        )
+        AttestationValidator.validate(inputs)
+        logger.lifecycle("✓ Gate E Independent Attestation Validation Passed.")
+    }
+}
+
+task verifyAttestationFixture {
+    doLast {
+        def repoRoot = getRepoRoot()
+        def fRoot = project.property('fixtureRoot')
+        def aPath = project.property('attestationPath')
+        def expProfile = project.property('expectedProfile')
+        def gitSha = project.property('gitCommitSha')
+        
+        def inputs = new ValidationInputs(
+            repoRoot: repoRoot,
+            attestationPath: aPath,
+            productionConfigPath: "${fRoot}/production-config.json",
+            policySourceFiles: [
+                "${fRoot}/policy-source/types.ts",
+                "${fRoot}/policy-source/transportPolicy.ts",
+                "${fRoot}/policy-source/resolveTransportConfig.ts"
+            ],
+            compiledPolicyPath: "${fRoot}/compiled-policy.cjs",
+            capacitorConfigPath: "${fRoot}/capacitor.config.ts",
+            assetTreeRoot: "${fRoot}/assets",
+            gitCommitSha: gitSha,
+            expectedApiOrigin: project.property('expectedApiOrigin'),
+            expectedSocketOrigin: project.property('expectedSocketOrigin'),
+            expectedMediaOrigin: project.property('expectedMediaOrigin'),
+            expectedProfile: expProfile,
+            expectedScheme: "https",
+            clockSource: "SYSTEM_MONOTONIC",
+            timestampPolicy: "VALIDATE_AGE",
+            dirtyWorktreePolicy: "BLOCK",
+            detachedHeadPolicy: "BLOCK",
+            submodulePolicy: "BLOCK"
+        )
+        AttestationValidator.validate(inputs)
+    }
+}
+
+tasks.whenTaskAdded { task ->
+    if (task.name == 'assembleRelease' || task.name == 'bundleRelease' || task.name == 'assembleStandardRelease' || task.name == 'bundleStandardRelease') {
+        task.dependsOn verifyProductionReleaseConfig
+    }
+}

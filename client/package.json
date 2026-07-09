@@ -5,11 +5,20 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "node scripts/security-gate.cjs && tsc -b && vite build",
+    "build:test": "TEST_HARNESS=true VITE_API_URL=http://localhost:5001/api node scripts/security-gate.cjs && TEST_HARNESS=true VITE_API_URL=http://localhost:5001/api tsc -b && TEST_HARNESS=true VITE_API_URL=http://localhost:5001/api vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run -c vitest.config.ts",
+    "cap:sync:android:prod": "node scripts/cap-gate.cjs && npx cap sync android",
+    "cap:copy:android:prod": "node scripts/cap-gate.cjs && npx cap copy android"
   },
   "dependencies": {
+    "@capacitor/android": "^8.4.1",
+    "@capacitor/app": "^8.1.0",
+    "@capacitor/core": "^8.4.1",
+    "@capacitor/filesystem": "^8.1.2",
+    "@capacitor/ios": "^8.4.1",
     "@reduxjs/toolkit": "^2.11.2",
     "@types/dompurify": "^3.0.5",
     "axios": "^1.13.6",
@@ -25,17 +34,24 @@
     "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.4.1",
     "@eslint/js": "^9.39.4",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/node": "^24.12.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
+    "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^9.39.4",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.2",
+    "fake-indexeddb": "^6.2.5",
     "globals": "^17.4.0",
+    "jsdom": "^29.1.1",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.57.0",
-    "vite": "^8.0.1"
+    "vite": "^8.0.1",
+    "vitest": "^4.1.10"
   }
 }
