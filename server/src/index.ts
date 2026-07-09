@@ -53,21 +53,37 @@ app.set('trust proxy', 1);
 
 const server = createServer(app);
 
+// CLIENT_URL supports comma-separated list: e.g. "https://yourapp.onrender.com,https://localhost"
 const allowedOrigins = [
-  process.env.CLIENT_URL || 'http://localhost:5173',
+  ...(process.env.CLIENT_URL || 'http://localhost:5173')
+    .split(',')
+    .map((u) => u.trim())
+    .filter(Boolean),
   'https://localhost',
-  'http://localhost'
+  'http://localhost',
+  'http://localhost:5173',
 ];
 
 const corsOptions = {
   origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-    if (!origin || allowedOrigins.includes(origin) || origin.startsWith('capacitor://')) {
+    // Allow requests with no origin (mobile apps, curl, server-to-server)
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+    // Allow Capacitor native origins
+    if (origin.startsWith('capacitor://') || origin.startsWith('ionic://')) {
+      callback(null, true);
+      return;
+    }
+    if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
+      logger.warn(`[CORS] Rejected origin: ${origin}`);
       callback(new Error('Not allowed by CORS'));
     }
   },
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
 };

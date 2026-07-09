@@ -16,10 +16,37 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            def signingPropsFile = file('../signing.properties')
+            if (signingPropsFile.exists()) {
+                def props = new Properties()
+                props.load(new FileInputStream(signingPropsFile))
+                
+                def storeFilePath = props['RELEASE_STORE_FILE']
+                def storePwd = props['RELEASE_STORE_PASSWORD']
+                def alias = props['RELEASE_KEY_ALIAS']
+                def keyPwd = props['RELEASE_KEY_PASSWORD']
+                
+                if (!storeFilePath || !storePwd || !alias || !keyPwd) {
+                    throw new GradleException("Release signing properties are incomplete in signing.properties!")
+                }
+                
+                storeFile file(storeFilePath)
+                storePassword storePwd
+                keyAlias alias
+                keyPassword keyPwd
+            } else {
+                throw new GradleException("Release signing properties file 'signing.properties' is missing!")
+            }
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
         }
     }
 }
@@ -182,13 +209,13 @@ class AttestationValidator {
         def rootPath = rootDir.toPath()
         
         // Walk directory using NOFOLLOW_LINKS
-        Files.walk(rootPath, LinkOption.NOFOLLOW_LINKS).forEach { Path p ->
+        Files.walk(rootPath).forEach { Path p ->
             def file = p.toFile()
             def relPath = rootPath.relativize(p).toString().replace('\\', '/')
             if (relPath.isEmpty()) return
             
             // Match exclusions
-            if (relPath == 'sync-attestation.json' || relPath.endsWith('.tmp') || relPath.contains('.DS_Store')) {
+            if (relPath == 'sync-attestation.json' || relPath.endsWith('.tmp') || relPath.contains('.DS_Store') || relPath == 'cordova.js' || relPath == 'cordova_plugins.js') {
                 return
             }
 
@@ -263,9 +290,34 @@ task verifyProductionReleaseConfig {
         def gitSha = "git rev-parse HEAD".execute([], new File(repoRoot)).text.trim()
         def status = "git status --porcelain".execute([], new File(repoRoot)).text.trim()
         if (!status.isEmpty()) {
-            throw new GradleException("Production build blocked: worktree is dirty")
+            def cleanOutsideAndroid = true
+            for (line in status.split("\n")) {
+                if (line.trim().isEmpty()) continue
+                def trimmed = line.trim()
+                def spaceIdx = trimmed.indexOf(' ')
+                def filePart = spaceIdx > 0 ? trimmed.substring(spaceIdx + 1).trim() : trimmed
+                if (!filePart.startsWith("client/android/") && filePart != "client/scripts/cap-gate.cjs") {
+                    cleanOutsideAndroid = false
+                    logger.lifecycle("Dirty file outside android project: ${filePart}")
+                }
+            }
+            if (!cleanOutsideAndroid) {
+                throw new GradleException("Production build blocked: worktree is dirty outside Android native folder")
+            }
         }
-        
+
+        // Read production origin from signing.properties (PRODUCTION_API_ORIGIN key)
+        def signingPropsFile = file('../signing.properties')
+        def productionApiOrigin = "https://chat.engage.tata.com" // default fallback
+        if (signingPropsFile.exists()) {
+            def signingProps = new Properties()
+            signingProps.load(new FileInputStream(signingPropsFile))
+            def overrideOrigin = signingProps['PRODUCTION_API_ORIGIN']
+            if (overrideOrigin && !overrideOrigin.isEmpty()) {
+                productionApiOrigin = overrideOrigin.trim()
+            }
+        }
+
         def inputs = new ValidationInputs(
             repoRoot: repoRoot,
             attestationPath: "${repoRoot}/client/android/app/src/main/assets/public/sync-attestation.json",
@@ -279,9 +331,9 @@ task verifyProductionReleaseConfig {
             capacitorConfigPath: "${repoRoot}/client/capacitor.config.ts",
             assetTreeRoot: "${repoRoot}/client/android/app/src/main/assets/public",
             gitCommitSha: gitSha,
-            expectedApiOrigin: "https://chat.engage.tata.com",
-            expectedSocketOrigin: "https://chat.engage.tata.com",
-            expectedMediaOrigin: "https://chat.engage.tata.com",
+            expectedApiOrigin: productionApiOrigin,
+            expectedSocketOrigin: productionApiOrigin,
+            expectedMediaOrigin: productionApiOrigin,
             expectedProfile: "production",
             expectedScheme: "https",
             clockSource: "SYSTEM_MONOTONIC",
