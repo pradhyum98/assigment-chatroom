@@ -567,7 +567,9 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
             {searchResults.length > 0
               ? searchResults.map((u) => (
                 <div key={u._id} className="friend-inline-row">
-                  <div className="room-avatar">{u.firstName.charAt(0).toUpperCase()}</div>
+                  <div className="avatar-wrapper">
+                    <div className="room-avatar">{u.firstName.charAt(0).toUpperCase()}</div>
+                  </div>
                   <div className="room-info">
                     <span className="room-name">{u.firstName} {u.lastName}</span>
                     <span className="room-preview">{u.email}</span>
@@ -596,7 +598,9 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
               const other = isIncoming ? req.sender : req.recipient;
               return (
                 <div key={req._id} className="friend-inline-row">
-                  <div className="room-avatar">{other.firstName.charAt(0).toUpperCase()}</div>
+                  <div className="avatar-wrapper">
+                    <div className="room-avatar">{other.firstName.charAt(0).toUpperCase()}</div>
+                  </div>
                   <div className="room-info">
                     <span className="room-name">{other.firstName} {other.lastName}</span>
                     <span className="room-preview" style={{ fontStyle: 'italic' }}>
