@@ -99,9 +99,11 @@ function runGate() {
   console.log('[Gate B] Starting compile-time attestation hash binding...');
   const repoRoot = getRepoRoot();
   const buildProfile = process.env.APP_BUILD_PROFILE || 'emulator';
-  const apiOrigin = process.env.VITE_API_URL || 'http://localhost:5001/api';
-  const socketOrigin = process.env.VITE_SOCKET_URL || 'http://localhost:5001';
-  const mediaOrigin = apiOrigin.replace(/\/api$/, '');
+  const rawApiUrl = process.env.VITE_API_URL || 'http://localhost:5001/api';
+  const apiOrigin = new URL(rawApiUrl).origin;
+  const rawSocketUrl = process.env.VITE_SOCKET_URL || 'http://localhost:5001';
+  const socketOrigin = new URL(rawSocketUrl).origin;
+  const mediaOrigin = apiOrigin;
 
   const gitCommitSha = execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
   const distDir = path.join(repoRoot, 'client/dist');
