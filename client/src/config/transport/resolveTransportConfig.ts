@@ -16,12 +16,23 @@ export function resolveTransportConfig(
 
   const buildProfile = profileInput as 'web' | 'emulator' | 'emulatorProductionTopology' | 'production';
 
-  // Basic origin cleanup (remove trailing slashes)
-  const apiOrigin = rawApiUrl.replace(/\/$/, '');
-  const socketOrigin = rawSocketUrl.replace(/\/$/, '');
-  const mediaOrigin = apiOrigin.replace(/\/api$/, '');
+  // On Android emulator, `localhost` resolves to the emulator device itself.
+  // Rewrite localhost/127.0.0.1 → 10.0.2.2 (host machine alias) so the app
+  // can reach the dev server running on the Mac.
+  const rewriteForEmulator = (url: string): string => {
+    return url
+      .replace('localhost', '10.0.2.2')
+      .replace('127.0.0.1', '10.0.2.2');
+  };
 
   const policy = TRANSPORT_POLICIES[buildProfile];
+
+  const shouldRewrite = platformInput === 'android' && policy.allowEmulatorRouting;
+
+  // Basic origin cleanup (remove trailing slashes)
+  const apiOrigin = (shouldRewrite ? rewriteForEmulator(rawApiUrl) : rawApiUrl).replace(/\/$/, '');
+  const socketOrigin = (shouldRewrite ? rewriteForEmulator(rawSocketUrl) : rawSocketUrl).replace(/\/$/, '');
+  const mediaOrigin = apiOrigin.replace(/\/api$/, '');
 
   const config: EffectiveTransportConfig = {
     buildProfile,
