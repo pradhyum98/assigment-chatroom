@@ -4,6 +4,7 @@ import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { loginStart, loginSuccess, loginFailure } from './authSlice';
 import api from '../../services/api';
 import { CryptoService } from '../../services/cryptoService';
+import { secretStore } from '../../services/secretStore';
 import './Auth.css';
 
 const SignupPage: React.FC = () => {
@@ -40,7 +41,6 @@ const SignupPage: React.FC = () => {
       const encryptedPrivateKey = await CryptoService.encryptPrivateKeyWithPassword(privateKey, formData.password, formData.email);
 
       // Save private key in memory
-      const { secretStore } = await import('../../services/secretStore');
       secretStore.setPrivateKey(keyPair.privateKey);
 
       const payload = { ...formData, publicKey, encryptedPrivateKey };

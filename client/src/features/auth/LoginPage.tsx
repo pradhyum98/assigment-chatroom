@@ -4,6 +4,7 @@ import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { loginStart, loginSuccess, loginFailure } from './authSlice';
 import api from '../../services/api';
 import { CryptoService } from '../../services/cryptoService';
+import { secretStore } from '../../services/secretStore';
 import './Auth.css';
 
 const LoginPage: React.FC = () => {
@@ -59,7 +60,6 @@ const LoginPage: React.FC = () => {
 
       // Save private key in memory
       const importedPrivKey = await CryptoService.importPrivateKey(privateKey);
-      const { secretStore } = await import('../../services/secretStore');
       secretStore.setPrivateKey(importedPrivKey);
 
       dispatch(loginSuccess(response.data.data));
@@ -83,7 +83,6 @@ const LoginPage: React.FC = () => {
       });
       
       const importedPrivKey = await CryptoService.importPrivateKey(privateKey);
-      const { secretStore } = await import('../../services/secretStore');
       
       // Clear in-memory secretStore
       secretStore.clearAll();
