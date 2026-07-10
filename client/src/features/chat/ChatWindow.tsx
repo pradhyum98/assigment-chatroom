@@ -30,6 +30,17 @@ interface ChatWindowProps {
   onBack?: () => void;
 }
 
+const generateUUID = (): string => {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+};
+
 const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
   const dispatch = useAppDispatch();
   const { rooms, currentRoom } = useAppSelector((state) => state.rooms);
@@ -519,9 +530,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
         }
       }
 
-      const clientMsgId = Math.random().toString(36).substring(7);
+      const clientMsgId = generateUUID();
       await syncEngine.enqueueMutation({
-        mutationId: globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : Math.random().toString(36).substring(7),
+        mutationId: generateUUID(),
         clientMsgId,
         accountId: user._id,
         roomId: targetRoom.roomId,
@@ -592,7 +603,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
       }
 
       await syncEngine.enqueueMutation({
-        mutationId: globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : Math.random().toString(36).substring(7),
+        mutationId: generateUUID(),
         accountId: user._id,
         roomId: currentRoom.roomId,
         actionType: 'EDIT_MESSAGE',
@@ -618,7 +629,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
       let mediaIvToSend: string | undefined = undefined;
       let encryptionVersionToSend: number | undefined = undefined;
 
-      const clientMsgId = globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : Math.random().toString(36).substring(7);
+      const clientMsgId = generateUUID();
 
       if (selectedFile) {
         setIsUploading(true);
@@ -672,7 +683,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
       }
 
       await syncEngine.enqueueMutation({
-        mutationId: globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : Math.random().toString(36).substring(7),
+        mutationId: generateUUID(),
         clientMsgId,
         accountId: user._id,
         roomId: currentRoom.roomId,
@@ -715,7 +726,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
     setIsUploading(true);
 
     try {
-      const clientMsgId = globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : Math.random().toString(36).substring(7);
+      const clientMsgId = generateUUID();
       // Encrypt the file before uploading
       const file = new (window as any).File([audioBlob], 'voice-message.webm', { type: 'audio/webm' }) as File;
       const { encryptedBlob, fileKey, ivBase64 } = await CryptoService.encryptFile(file);
@@ -734,7 +745,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
       });
 
       await syncEngine.enqueueMutation({
-        mutationId: globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : Math.random().toString(36).substring(7),
+        mutationId: generateUUID(),
         clientMsgId,
         accountId: user._id,
         roomId: currentRoom.roomId,
@@ -778,7 +789,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
   const handleDelete = (msg: any, forEveryone: boolean) => {
     if (!currentRoom || !user) return;
     syncEngine.enqueueMutation({
-      mutationId: globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : Math.random().toString(36).substring(7),
+      mutationId: generateUUID(),
       accountId: user._id,
       roomId: currentRoom.roomId,
       actionType: 'DELETE_MESSAGE',
@@ -798,7 +809,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
     const actionType = hasReacted ? 'REMOVE_REACTION' : 'ADD_REACTION';
 
     syncEngine.enqueueMutation({
-      mutationId: globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : Math.random().toString(36).substring(7),
+      mutationId: generateUUID(),
       accountId: user._id,
       roomId: currentRoom.roomId,
       actionType,
