@@ -84,6 +84,11 @@ class SyncEngine {
     // 2. Rehydrate pending outbox mutations into Redux optimistic overlay
     await this._rehydrateOutboxOverlay(accountId);
 
+    // 2b. Reset any PERMANENTLY_REJECTED messages back to PENDING.
+    // These were wrongly rejected by CryptoRevalidationService when room_projections
+    // was empty (IDB not yet bootstrapped). Now that the bug is fixed, retry them.
+    await this._resetWronglyRejectedMutations(accountId);
+
     // 3. Trigger initial bootstrap recovery (IDB → Redux hydration happens inside)
     await this.recoveryCoordinator.triggerRecovery('app_startup');
 
@@ -98,8 +103,13 @@ class SyncEngine {
       });
       socket.on('connect', () => {
         this.recoveryCoordinator.triggerRecovery('socket_connect');
+        // Flush outbox on every reconnect so queued messages go out immediately.
+        this.outboxService.flush();
       });
     }
+
+    // 5. Flush outbox once on startup (after recovery) so any pending messages go out.
+    this.outboxService.flush();
   }
 
   async logout(accountId: string): Promise<void> {
@@ -191,6 +201,33 @@ class SyncEngine {
       }
     } catch (e) {
       console.warn('[SyncEngine] Failed to rehydrate outbox overlay:', e);
+    }
+  }
+
+  /**
+   * Resets PERMANENTLY_REJECTED mutations back to PENDING so they are retried.
+   * These were wrongly rejected when room_projections was not yet populated in IDB.
+   */
+  private async _resetWronglyRejectedMutations(accountId: string) {
+    try {
+      const idb = await this.db.open();
+      const tx = idb.transaction('offline_queue_v3', 'readwrite');
+      const store = tx.objectStore('offline_queue_v3');
+      const range = IDBKeyRange.bound([accountId, ''], [accountId, '\uffff']);
+      const req = store.getAll(range);
+      req.onsuccess = () => {
+        const items: any[] = req.result || [];
+        items
+          .filter((i) => i.status === 'PERMANENTLY_REJECTED' && i.actionType === 'SEND_MESSAGE')
+          .forEach((item) => {
+            item.status = 'PENDING';
+            item.attemptCount = 0;
+            item.nextAttemptAt = Date.now();
+            store.put(item);
+          });
+      };
+    } catch (e) {
+      console.warn('[SyncEngine] Failed to reset rejected mutations:', e);
     }
   }
 }

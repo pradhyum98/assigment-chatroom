@@ -17,8 +17,45 @@ const createRoomSchema = z.object({
     .max(50, 'Room name is too long (max 50 characters)')
     .trim(),
   participants: z.array(z.string()).optional(), // Add participants for private groups
-  encryptedRoomKeys: z.record(z.string()).optional(), // Record<userId, encryptedKey>
+  encryptedRoomKeys: z.record(z.union([
+    z.string(),
+    z.object({
+      encryptedKey: z.string(),
+      identityVersion: z.number(),
+    }),
+  ])).optional(),
 });
+
+const normalizeEncryptedRoomKeys = (
+  encryptedRoomKeys: Record<string, string | { encryptedKey: string; identityVersion: number }> = {}
+): Record<string, { encryptedKey: string; identityVersion: number }> => {
+  return Object.fromEntries(
+    Object.entries(encryptedRoomKeys).flatMap(([userId, value]) => {
+      if (!value) return [];
+      if (typeof value === 'string') {
+        return [[userId, { encryptedKey: value, identityVersion: 1 }]];
+      }
+      if (typeof value.encryptedKey === 'string') {
+        return [[userId, { encryptedKey: value.encryptedKey, identityVersion: value.identityVersion || 1 }]];
+      }
+      return [];
+    })
+  );
+};
+
+const shouldRepairRoomKeys = (
+  roomKeys: any,
+  submittedKeys: Record<string, { encryptedKey: string; identityVersion: number }>
+): boolean => {
+  if (!submittedKeys || Object.keys(submittedKeys).length === 0) return false;
+  for (const [userId, envelope] of Object.entries(submittedKeys)) {
+    const existing = roomKeys instanceof Map ? roomKeys.get(userId) : roomKeys?.[userId];
+    if (!existing) return true;
+    if (typeof existing === 'string') return true;
+    if (!existing.encryptedKey && envelope.encryptedKey) return true;
+  }
+  return false;
+};
 
 /**
  * Get or create a direct message (DM) room with a friend
@@ -60,6 +97,17 @@ export const createOrGetDM = async (
     });
 
     if (room) {
+      const submittedKeys = normalizeEncryptedRoomKeys(req.body.encryptedRoomKeys || {});
+      if (shouldRepairRoomKeys(room.encryptedRoomKeys, submittedKeys)) {
+        Object.entries(submittedKeys).forEach(([userId, envelope]) => {
+          const existing = room!.encryptedRoomKeys.get(userId);
+          if (!existing || typeof existing === 'string' || !(existing as any).encryptedKey) {
+            room!.encryptedRoomKeys.set(userId, envelope);
+          }
+        });
+        await room.save();
+      }
+
       const populated = await room.populate([
         { path: 'participants', select: 'firstName lastName email isOnline lastSeen publicKey' },
         { path: 'lastMessage' }
@@ -86,7 +134,7 @@ export const createOrGetDM = async (
         previewText: 'Click to start chatting',
         createdBy: user._id,
         participants: participantIds,
-        encryptedRoomKeys: req.body.encryptedRoomKeys || {},
+        encryptedRoomKeys: normalizeEncryptedRoomKeys(req.body.encryptedRoomKeys || {}),
       });
 
       auditLog.dmRoomCreated(room.roomId, user.email, participantIds);
@@ -175,7 +223,7 @@ export const createRoom = async (
       isDM: false,
       isPrivate: true, // Private-by-default for security
       admins: [user._id],
-      encryptedRoomKeys,
+      encryptedRoomKeys: normalizeEncryptedRoomKeys(encryptedRoomKeys),
     });
 
     const populated = await room.populate([

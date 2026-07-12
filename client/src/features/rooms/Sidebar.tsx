@@ -107,7 +107,8 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
   const getRoomKey = async (roomId: string, encryptedRoomKeys: any) => {
     try {
       const { secretStore } = await import('../../services/secretStore');
-      const encryptedKeyForMe = encryptedRoomKeys ? encryptedRoomKeys[user?._id || ''] : undefined;
+      const rawKey = encryptedRoomKeys ? encryptedRoomKeys[user?._id || ''] : undefined;
+      const encryptedKeyForMe = rawKey && typeof rawKey === 'object' ? rawKey.encryptedKey : rawKey;
       return await secretStore.getOrUnwrapRoomKey(roomId, encryptedKeyForMe);
     } catch (e) {
       console.error('Failed to decrypt room key in sidebar', e);
@@ -259,14 +260,20 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
     try {
       const roomKey = await CryptoService.generateRoomKey();
       const roomKeyBase64 = await CryptoService.exportRoomKey(roomKey);
-      const encryptedRoomKeys: Record<string, string> = {};
+      const encryptedRoomKeys: Record<string, { encryptedKey: string; identityVersion: number }> = {};
       const allParticipants = [user?._id, ...selectedFriends].filter(Boolean) as string[];
       const pubKeyMap: Record<string, string> = {};
       if (user?._id && user?.publicKey) pubKeyMap[user._id] = user.publicKey;
       friendsList.forEach((f) => { if (f.publicKey) pubKeyMap[f._id] = f.publicKey; });
       for (const pId of allParticipants) {
         const pubKey = pubKeyMap[pId];
-        if (pubKey) encryptedRoomKeys[pId] = await CryptoService.encryptRoomKeyForUser(roomKeyBase64, pubKey);
+        const participant = pId === user?._id ? user : friendsList.find((f) => f._id === pId);
+        if (pubKey) {
+          encryptedRoomKeys[pId] = {
+            encryptedKey: await CryptoService.encryptRoomKeyForUser(roomKeyBase64, pubKey),
+            identityVersion: participant?.identityVersion || 1,
+          };
+        }
       }
       const response = await api.post('/rooms', { roomName: newRoomName, participants: selectedFriends, encryptedRoomKeys });
       const createdRoom = response.data.data.room;
@@ -329,8 +336,14 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
       dispatch(setSearchResults(searchResults.filter((u) => u._id !== recipientId)));
       const res = await api.get('/friends/requests');
       dispatch(setPendingRequests(res.data.data.requests));
-    } catch (err) { console.error('Failed to send friend request:', err); }
-    finally { setActionLoading(null); }
+      alert('Friend request sent successfully.');
+    } catch (err: any) {
+      console.error('Failed to send friend request:', err);
+      const errMsg = err.response?.data?.message || err.message || 'Unknown error';
+      alert(`Failed to send friend request: ${errMsg}`);
+    } finally {
+      setActionLoading(null);
+    }
   };
 
   const handleRespondRequest = async (requestId: string, action: 'accept' | 'reject') => {
@@ -338,8 +351,14 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
     try {
       await api.post(`/friends/requests/${requestId}/respond`, { action });
       await fetchFriendsData();
-    } catch (err) { console.error(`Failed to ${action} request:`, err); }
-    finally { setActionLoading(null); }
+      alert(`Friend request ${action}ed successfully.`);
+    } catch (err: any) {
+      console.error(`Failed to ${action} request:`, err);
+      const errMsg = err.response?.data?.message || err.message || 'Unknown error';
+      alert(`Failed to ${action} request: ${errMsg}`);
+    } finally {
+      setActionLoading(null);
+    }
   };
 
   const handleRemoveFriend = async (friendId: string) => {
@@ -348,26 +367,52 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
     try {
       await api.post('/friends/remove', { friendId });
       dispatch(removeFriendFromState(friendId));
-    } catch (err) { console.error('Failed to remove friend:', err); }
-    finally { setActionLoading(null); }
+      alert('Friend removed successfully.');
+    } catch (err: any) {
+      console.error('Failed to remove friend:', err);
+      const errMsg = err.response?.data?.message || err.message || 'Unknown error';
+      alert(`Failed to remove friend: ${errMsg}`);
+    } finally {
+      setActionLoading(null);
+    }
   };
 
   const handleStartDM = async (friendId: string) => {
     setActionLoading(friendId);
     try {
       const friend = friends.find((f) => f._id === friendId);
-      const roomKey = await CryptoService.generateRoomKey();
-      const roomKeyBase64 = await CryptoService.exportRoomKey(roomKey);
-      const encryptedRoomKeys: Record<string, string> = {};
-      if (user?.publicKey) encryptedRoomKeys[user._id] = await CryptoService.encryptRoomKeyForUser(roomKeyBase64, user.publicKey);
-      if (friend?.publicKey) encryptedRoomKeys[friendId] = await CryptoService.encryptRoomKeyForUser(roomKeyBase64, friend.publicKey);
+
+      // Build encryptedRoomKeys in the format the server schema expects:
+      // Record<userId, { encryptedKey: string; identityVersion: number }>
+      const encryptedRoomKeys: Record<string, { encryptedKey: string; identityVersion: number }> = {};
+
+      if (user?.publicKey && friend?.publicKey) {
+        // Both users have public keys — perform E2EE key setup
+        const roomKey = await CryptoService.generateRoomKey();
+        const roomKeyBase64 = await CryptoService.exportRoomKey(roomKey);
+        encryptedRoomKeys[user._id] = {
+          encryptedKey: await CryptoService.encryptRoomKeyForUser(roomKeyBase64, user.publicKey),
+          identityVersion: 1,
+        };
+        encryptedRoomKeys[friendId] = {
+          encryptedKey: await CryptoService.encryptRoomKeyForUser(roomKeyBase64, friend.publicKey),
+          identityVersion: 1,
+        };
+      }
+      // If either user lacks a public key, send empty keys — server allows {} default.
+
       const response = await api.post(`/rooms/dm/${friendId}`, { encryptedRoomKeys });
       const room = response.data.data.room;
       dispatch(addRoom(room));
       dispatch(setCurrentRoom(room));
       setActiveTab('chats');
-    } catch (err) { console.error('Failed to start DM:', err); }
-    finally { setActionLoading(null); }
+    } catch (err: any) {
+      console.error('Failed to start DM:', err);
+      const errMsg = err.response?.data?.message || err.message || 'Unknown error';
+      alert(`Failed to start DM: ${errMsg}`);
+    } finally {
+      setActionLoading(null);
+    }
   };
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -518,7 +563,12 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
         {peopleTab === 'list' && (
           friends.length > 0
             ? friends.map((friend) => (
-              <div key={friend._id} className="friend-inline-row">
+              <div 
+                key={friend._id} 
+                className="friend-inline-row"
+                style={{ cursor: 'pointer' }}
+                onClick={() => handleStartDM(friend._id)}
+              >
                 <div className="avatar-wrapper">
                   <div className="room-avatar">{friend.firstName.charAt(0).toUpperCase()}</div>
                   {friend.isOnline && <div className="status-dot" />}
@@ -531,7 +581,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
                   <button
                     className="create-room-btn"
                     title="Message"
-                    onClick={() => handleStartDM(friend._id)}
+                    onClick={(e) => { e.stopPropagation(); handleStartDM(friend._id); }}
                     disabled={actionLoading === friend._id}
                   >
                     <MessageSquare size={15} />
@@ -540,7 +590,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
                     className="create-room-btn"
                     title="Remove"
                     style={{ background: '#ef444415', color: '#ef4444' }}
-                    onClick={() => handleRemoveFriend(friend._id)}
+                    onClick={(e) => { e.stopPropagation(); handleRemoveFriend(friend._id); }}
                     disabled={actionLoading === friend._id}
                   >
                     <Trash2 size={15} />
@@ -566,7 +616,12 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
             </div>
             {searchResults.length > 0
               ? searchResults.map((u) => (
-                <div key={u._id} className="friend-inline-row">
+                <div 
+                  key={u._id} 
+                  className="friend-inline-row"
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => alert("Profile screen is unimplemented.")}
+                >
                   <div className="avatar-wrapper">
                     <div className="room-avatar">{u.firstName.charAt(0).toUpperCase()}</div>
                   </div>
@@ -577,7 +632,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
                   <button
                     className="create-room-btn"
                     title="Add Friend"
-                    onClick={() => handleSendRequest(u._id)}
+                    onClick={(e) => { e.stopPropagation(); handleSendRequest(u._id); }}
                     disabled={actionLoading === u._id}
                   >
                     <Send size={15} />
@@ -597,7 +652,12 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
               const isIncoming = req.recipient._id === user?._id;
               const other = isIncoming ? req.sender : req.recipient;
               return (
-                <div key={req._id} className="friend-inline-row">
+                <div 
+                  key={req._id} 
+                  className="friend-inline-row"
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => alert("Profile screen is unimplemented.")}
+                >
                   <div className="avatar-wrapper">
                     <div className="room-avatar">{other.firstName.charAt(0).toUpperCase()}</div>
                   </div>
@@ -613,7 +673,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
                         className="create-room-btn"
                         title="Accept"
                         style={{ background: '#22c55e22', color: '#22c55e' }}
-                        onClick={() => handleRespondRequest(req._id, 'accept')}
+                        onClick={(e) => { e.stopPropagation(); handleRespondRequest(req._id, 'accept'); }}
                         disabled={actionLoading === req._id}
                       >
                         <Check size={15} />
@@ -622,7 +682,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
                         className="create-room-btn"
                         title="Decline"
                         style={{ background: '#ef444422', color: '#ef4444' }}
-                        onClick={() => handleRespondRequest(req._id, 'reject')}
+                        onClick={(e) => { e.stopPropagation(); handleRespondRequest(req._id, 'reject'); }}
                         disabled={actionLoading === req._id}
                       >
                         <X size={15} />
@@ -814,7 +874,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
             <ChevronRight size={18} color="var(--text-muted)" />
           </button>
 
-          <button className="settings-menu-option" onClick={() => {}}>
+          <button className="settings-menu-option" onClick={() => alert("Notifications screen is unimplemented.")}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <Bell size={18} color="var(--primary)" />
               <span className="settings-option-label">Notifications</span>
@@ -822,7 +882,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
             <ChevronRight size={18} color="var(--text-muted)" />
           </button>
 
-          <button className="settings-menu-option" onClick={() => {}}>
+          <button className="settings-menu-option" onClick={() => alert("Privacy & Security screen is unimplemented.")}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <Shield size={18} color="var(--primary)" />
               <span className="settings-option-label">Privacy &amp; Security</span>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
-import { setMessages, clearTyping } from './chatSlice';
+import { setMessages, clearTyping, selectVisibleMessages } from './chatSlice';
 import { clearUnreadCount, setCurrentRoom } from '../rooms/roomsSlice';
 import api, { getAccessToken } from '../../services/api';
 import { TransportConfig } from '../../config/TransportConfig';
@@ -46,6 +46,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
   const { rooms, currentRoom } = useAppSelector((state) => state.rooms);
   const { user } = useAppSelector((state) => state.auth);
   const { messages, typingUsers } = useAppSelector((state) => state.chat);
+  const visibleMessages = useAppSelector((state) =>
+    currentRoom ? selectVisibleMessages(state, currentRoom.roomId, user?._id) : []
+  );
   const { startCall } = useCall();
   const [newMessage, setNewMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -104,7 +107,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
       }
       const privKeyBase64 = localStorage.getItem('e2e_private_key');
       if (privKeyBase64 && encryptedRoomKeys) {
-        const myEncKey = encryptedRoomKeys[user?._id || ''];
+        const rawKey = encryptedRoomKeys[user?._id || ''];
+        const myEncKey = rawKey && typeof rawKey === 'object' ? rawKey.encryptedKey : rawKey;
         if (myEncKey) {
           const privKey = await CryptoService.importPrivateKey(privKeyBase64);
           const roomKeyStr = await CryptoService.decryptRoomKey(myEncKey, privKey);
@@ -456,14 +460,14 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
       const container = messagesContainerRef.current;
       const isNearBottom = container.scrollHeight - container.clientHeight - container.scrollTop < 250;
       
-      const lastMsg = messages[messages.length - 1];
+      const lastMsg = visibleMessages[visibleMessages.length - 1];
       const isSentByMe = lastMsg && lastMsg.senderId === user?._id;
 
       if (isSentByMe || isNearBottom) {
         messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
       }
     }
-  }, [messages, currentRoom, user]);
+  }, [visibleMessages, currentRoom, user]);
 
   // Star message helpers
   const toggleStarMessage = (msgId: string) => {
@@ -638,7 +642,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
         
         // Convert Blob to File to upload
         const encryptedFileToUpload = new (window as any).File([encryptedBlob], selectedFile.name, { type: 'application/octet-stream' }) as File;
-        const uploadResult = await UploadService.uploadFileResumable(encryptedFileToUpload);
+        const uploadResult = await UploadService.uploadFileResumable(encryptedFileToUpload, currentRoom.roomId);
         mediaData = uploadResult.data;
         
         // Ensure type maps back since we uploaded as octet-stream
@@ -667,7 +671,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
         cancelFileSelection();
       }
 
-      let contentToSend = newMessage.trim();
+      const displayContent = newMessage.trim();
+      let contentToSend = displayContent;
       let ivToSend: string | undefined = undefined;
 
       const roomKey = await getRoomKey(currentRoom.roomId, currentRoom.encryptedRoomKeys);
@@ -694,6 +699,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
           senderId: user._id,
           senderName: `${user.firstName} ${user.lastName}`,
           content: contentToSend,
+          displayContent,
           iv: ivToSend,
           timestamp: new Date().toISOString(),
           type: mediaData ? (mediaData.type as any) : 'text',
@@ -732,7 +738,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
       const { encryptedBlob, fileKey, ivBase64 } = await CryptoService.encryptFile(file);
       
       const encryptedFileToUpload = new (window as any).File([encryptedBlob], 'voice-message.webm', { type: 'application/octet-stream' }) as File;
-      const uploadResult = await UploadService.uploadFileResumable(encryptedFileToUpload);
+      const uploadResult = await UploadService.uploadFileResumable(encryptedFileToUpload, currentRoom.roomId);
       const mediaData = uploadResult.data;
 
       // Wrap media key
@@ -843,12 +849,15 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
       
       const newRoomKey = await CryptoService.generateRoomKey();
       const newRoomKeyBase64 = await CryptoService.exportRoomKey(newRoomKey);
-      const encryptedRoomKeys: Record<string, string> = {};
+      const encryptedRoomKeys: Record<string, { encryptedKey: string; identityVersion: number }> = {};
       
       for (const p of remainingParticipants) {
         if (p.publicKey) {
           const encryptedKey = await CryptoService.encryptRoomKeyForUser(newRoomKeyBase64, p.publicKey);
-          encryptedRoomKeys[p._id] = encryptedKey;
+          encryptedRoomKeys[p._id] = {
+            encryptedKey,
+            identityVersion: p.identityVersion || 1,
+          };
         }
       }
 
@@ -885,7 +894,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
   const _starsDummy = starredTrigger;
   if (_starsDummy) {}
 
-  const filteredMessages = messages.filter((msg) => {
+  const filteredMessages = visibleMessages.filter((msg) => {
     const id = msg.messageId || msg._id;
     if (deletedForMeList.includes(id)) {
       return false;

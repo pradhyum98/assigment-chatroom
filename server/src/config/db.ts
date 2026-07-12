@@ -19,6 +19,10 @@ const connectDB = async (): Promise<void> => {
     });
 
     logger.info('Connected to MongoDB Atlas');
+
+    // Start GridFS media cleanup scheduler
+    const { GridFSService } = await import('../services/GridFSService');
+    GridFSService.startPruningScheduler();
   } catch (error: any) {
     logger.error('Database connection failed:', error.message);
     process.exit(1);

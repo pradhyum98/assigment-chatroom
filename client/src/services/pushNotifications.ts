@@ -1,4 +1,5 @@
 import api from './api';
+import platformService from '../platform/PlatformService';
 
 function urlBase64ToUint8Array(base64String: string) {
   const padding = '='.repeat((4 - base64String.length % 4) % 4);
@@ -16,6 +17,10 @@ function urlBase64ToUint8Array(base64String: string) {
 }
 
 export const subscribeToPushNotifications = async () => {
+  if (platformService.getCapabilities().isNative) {
+    return;
+  }
+
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
     console.warn('Push notifications are not supported by the browser.');
     return;

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "node scripts/security-gate.cjs && tsc -b && vite build",
+    "build:production": "node scripts/build-production.cjs",
     "build:test": "TEST_HARNESS=true VITE_API_URL=http://localhost:5001/api node scripts/security-gate.cjs && TEST_HARNESS=true VITE_API_URL=http://localhost:5001/api tsc -b && TEST_HARNESS=true VITE_API_URL=http://localhost:5001/api vite build",
     "lint": "eslint .",
     "preview": "vite preview",

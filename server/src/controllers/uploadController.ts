@@ -3,74 +3,24 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
-const uuidv4 = () => crypto.randomUUID();
+import { Readable } from 'stream';
 import { AppError } from '../middleware/errorHandler';
-import { v2 as cloudinary } from 'cloudinary';
+import { AuthRequest } from '../types';
+import { ChatRoom } from '../models/ChatRoom';
+import { GridFSService } from '../services/GridFSService';
 
-// ─── Cloudinary Configuration ──────────────────────────────────────────────────
+const uuidv4 = () => crypto.randomUUID();
 
-const useCloudinary = !!(
-  process.env.CLOUDINARY_CLOUD_NAME &&
-  process.env.CLOUDINARY_API_KEY &&
-  process.env.CLOUDINARY_API_SECRET
-);
-
-if (useCloudinary) {
-  cloudinary.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-    api_key: process.env.CLOUDINARY_API_KEY,
-    api_secret: process.env.CLOUDINARY_API_SECRET,
-    secure: true,
-  });
-  console.log('[Upload] Cloudinary storage enabled.');
-} else {
-  console.warn('[Upload] CLOUDINARY env vars not set — falling back to local disk storage.');
-}
-
-// ─── Helper: upload a local file path to Cloudinary ────────────────────────────
-
-const uploadToCloudinary = (filePath: string, mimetype: string): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const resourceType = mimetype.startsWith('video/') ? 'video'
-      : mimetype.startsWith('image/') ? 'image'
-      : 'raw';
-
-    cloudinary.uploader.upload(filePath, {
-      resource_type: resourceType,
-      folder: 'chatroom_uploads',
-      // Store as raw since E2EE media is encrypted binary
-      ...(resourceType === 'raw' ? {} : { resource_type: 'raw' }),
-    }, (err, result) => {
-      if (err || !result) return reject(err || new Error('Cloudinary upload returned no result'));
-      resolve(result.secure_url);
-    });
-  });
-};
-
-// Always use raw resource type since files are E2EE encrypted blobs
-const uploadRawToCloudinary = (filePath: string, publicId: string): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    cloudinary.uploader.upload(filePath, {
-      resource_type: 'raw',
-      folder: 'chatroom_uploads',
-      public_id: publicId,
-      overwrite: true,
-    }, (err, result) => {
-      if (err || !result) return reject(err || new Error('Cloudinary upload returned no result'));
-      resolve(result.secure_url);
-    });
-  });
-};
-
-// ─── Local Fallback Paths ───────────────────────────────────────────────────────
-
+// ─── Local Temp Directory for Chunks ───────────────────────────────────────────
 const UPLOAD_DIR = path.join(__dirname, '../../uploads');
+const CHUNKS_DIR = path.join(UPLOAD_DIR, 'chunks');
 
-if (!fs.existsSync(UPLOAD_DIR)) {
-  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+if (!fs.existsSync(CHUNKS_DIR)) {
+  fs.mkdirSync(CHUNKS_DIR, { recursive: true });
 }
 
-// ─── Multer (memory storage for single upload, disk storage for chunked) ────────
+// ─── Size and Type Limits ──────────────────────────────────────────────────────
+const MAX_FILE_SIZE = parseInt(process.env.MAX_MEDIA_SIZE || '10485760', 10); // Default 10 MB
 
 const ALLOWED_MIME_TYPES = [
   'image/jpeg', 'image/png', 'image/gif', 'image/webp',
@@ -80,8 +30,7 @@ const ALLOWED_MIME_TYPES = [
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'text/plain',
-  // E2EE encrypted blobs
-  'application/octet-stream',
+  'application/octet-stream', // E2EE encrypted blobs
 ];
 
 const fileFilter = (req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
@@ -92,12 +41,10 @@ const fileFilter = (req: Request, file: Express.Multer.File, cb: multer.FileFilt
   }
 };
 
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
-
-// Memory storage for single-shot uploads (Cloudinary path)
+// Memory storage for single-shot uploads (GridFS direct streaming)
 const memoryStorage = multer.memoryStorage();
 
-// Disk storage for chunked uploads (chunks need to be on disk)
+// Disk storage for temp chunk files
 const diskStorage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOAD_DIR),
   filename: (req, file, cb) => {
@@ -107,44 +54,61 @@ const diskStorage = multer.diskStorage({
 });
 
 export const upload = multer({
-  storage: useCloudinary ? memoryStorage : diskStorage,
+  storage: memoryStorage,
   limits: { fileSize: MAX_FILE_SIZE },
   fileFilter,
 });
 
+export const chunkUpload = multer({
+  storage: diskStorage,
+  limits: { fileSize: MAX_FILE_SIZE },
+});
+
+// Helper: Verify user is a member of the room
+const verifyRoomMembership = async (roomId: string, userId: string): Promise<boolean> => {
+  const room = await ChatRoom.findOne({ roomId });
+  if (!room) return false;
+  return room.participants.some((p) => p.toString() === userId);
+};
+
 // ─── Single-shot Upload Endpoint ───────────────────────────────────────────────
-
-export const handleFileUpload = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+export const handleFileUpload = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
+    const userId = req.user?._id?.toString();
+    if (!userId) throw new AppError('Unauthorized', 401);
+
+    const { roomId } = req.body;
+    if (!roomId) throw new AppError('roomId is required.', 400);
+
+    const isMember = await verifyRoomMembership(roomId, userId);
+    if (!isMember) throw new AppError('Forbidden: Not a room participant.', 403);
+
     if (!req.file) throw new AppError('No file uploaded.', 400);
+    if (req.file.size > MAX_FILE_SIZE) throw new AppError('File size exceeds maximum limit.', 400);
 
-    let fileUrl: string;
+    // Stream buffer directly to GridFS
+    const bufferStream = new Readable();
+    bufferStream.push(req.file.buffer);
+    bufferStream.push(null);
 
-    if (useCloudinary && req.file.buffer) {
-      // Stream buffer to Cloudinary
-      const publicId = uuidv4();
-      fileUrl = await new Promise<string>((resolve, reject) => {
-        const stream = cloudinary.uploader.upload_stream(
-          { resource_type: 'raw', folder: 'chatroom_uploads', public_id: publicId },
-          (err, result) => {
-            if (err || !result) return reject(err || new Error('No result'));
-            resolve(result.secure_url);
-          }
-        );
-        stream.end(req.file!.buffer);
-      });
-    } else {
-      fileUrl = `/uploads/${req.file.filename}`;
-    }
+    const fileId = await GridFSService.uploadFromStream(
+      bufferStream,
+      req.file.originalname,
+      req.file.mimetype,
+      roomId,
+      userId
+    );
 
     let type = 'file';
     if (req.file.mimetype.startsWith('image/')) type = 'image';
     else if (req.file.mimetype.startsWith('video/')) type = 'video';
     else if (req.file.mimetype.startsWith('audio/')) type = 'audio';
 
+    const fileUrl = `/api/upload/download/${fileId.toString()}`;
+
     res.status(200).json({
       success: true,
-      message: 'File uploaded successfully',
+      message: 'File uploaded to GridFS successfully',
       data: {
         url: fileUrl,
         filename: req.file.originalname,
@@ -159,29 +123,31 @@ export const handleFileUpload = async (req: Request, res: Response, next: NextFu
 };
 
 // ─── Chunked Resumable Upload Controllers ──────────────────────────────────────
-// Chunks are always saved to local disk, assembled, then pushed to Cloudinary
-
-// For chunked uploads always use disk
-export const chunkUpload = multer({
-  storage: diskStorage,
-  limits: { fileSize: MAX_FILE_SIZE },
-});
-
-export const handleInitiateUpload = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+export const handleInitiateUpload = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const { uploadId, filename, size, mimetype } = req.body;
-    if (!uploadId || !filename || size === undefined || !mimetype) {
+    const userId = req.user?._id?.toString();
+    if (!userId) throw new AppError('Unauthorized', 401);
+
+    const { uploadId, filename, size, mimetype, roomId } = req.body;
+    if (!uploadId || !filename || size === undefined || !mimetype || !roomId) {
       throw new AppError('Missing required upload initiation parameters.', 400);
     }
 
-    const chunksDir = path.join(UPLOAD_DIR, 'chunks', uploadId);
+    if (size > MAX_FILE_SIZE) {
+      throw new AppError('File size exceeds maximum limit.', 400);
+    }
+
+    const isMember = await verifyRoomMembership(roomId, userId);
+    if (!isMember) throw new AppError('Forbidden: Not a room participant.', 403);
+
+    const chunksDir = path.join(CHUNKS_DIR, uploadId);
     if (!fs.existsSync(chunksDir)) {
       fs.mkdirSync(chunksDir, { recursive: true });
     }
 
     fs.writeFileSync(
       path.join(chunksDir, 'metadata.json'),
-      JSON.stringify({ filename, size, mimetype }),
+      JSON.stringify({ filename, size, mimetype, roomId }),
       'utf-8'
     );
 
@@ -191,12 +157,12 @@ export const handleInitiateUpload = async (req: Request, res: Response, next: Ne
   }
 };
 
-export const handleUploadStatus = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+export const handleUploadStatus = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
     const uploadId = req.query['uploadId'] as string;
     if (!uploadId) throw new AppError('uploadId is required.', 400);
 
-    const chunksDir = path.join(UPLOAD_DIR, 'chunks', uploadId);
+    const chunksDir = path.join(CHUNKS_DIR, uploadId);
     if (fs.existsSync(chunksDir)) {
       const files = fs.readdirSync(chunksDir);
       const indices = files.map((f) => parseInt(f)).filter((n) => !isNaN(n)).sort((a, b) => a - b);
@@ -211,16 +177,33 @@ export const handleUploadStatus = async (req: Request, res: Response, next: Next
   }
 };
 
-export const handleChunkUpload = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+export const handleChunkUpload = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
+    const userId = req.user?._id?.toString();
+    if (!userId) throw new AppError('Unauthorized', 401);
+
     const { uploadId, chunkIndex, totalChunks } = req.body;
     if (!uploadId || chunkIndex === undefined || !totalChunks) {
       throw new AppError('Missing required chunk upload body fields.', 400);
     }
     if (!req.file) throw new AppError('Chunk file is missing in multipart upload.', 400);
 
-    const chunksDir = path.join(UPLOAD_DIR, 'chunks', uploadId);
-    if (!fs.existsSync(chunksDir)) fs.mkdirSync(chunksDir, { recursive: true });
+    const chunksDir = path.join(CHUNKS_DIR, uploadId);
+    if (!fs.existsSync(chunksDir)) {
+      fs.mkdirSync(chunksDir, { recursive: true });
+    }
+
+    // Read metadata and verify authorization
+    const metaPath = path.join(chunksDir, 'metadata.json');
+    if (!fs.existsSync(metaPath)) throw new AppError('Upload session not found or expired.', 400);
+    const { roomId, filename, mimetype, size } = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+
+    const isMember = await verifyRoomMembership(roomId, userId);
+    if (!isMember) {
+      // Remove uploaded chunk file if unauthorized
+      try { fs.unlinkSync(req.file.path); } catch { /* ignore */ }
+      throw new AppError('Forbidden: Not a room participant.', 403);
+    }
 
     const tempPath = req.file.path;
     const chunkDest = path.join(chunksDir, parseInt(chunkIndex).toString());
@@ -230,11 +213,6 @@ export const handleChunkUpload = async (req: Request, res: Response, next: NextF
     const files = fs.readdirSync(chunksDir).filter((f) => f !== 'metadata.json');
 
     if (files.length === totalVal) {
-      const metaPath = path.join(chunksDir, 'metadata.json');
-      if (!fs.existsSync(metaPath)) throw new AppError('Upload session metadata missing.', 400);
-
-      const { filename, size, mimetype } = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
-
       const ext = path.extname(filename).toLowerCase();
       const safeFilename = `${uuidv4()}${ext}`;
       const destPath = path.join(UPLOAD_DIR, safeFilename);
@@ -249,19 +227,25 @@ export const handleChunkUpload = async (req: Request, res: Response, next: NextF
       }
       writeStream.end();
 
-      // Cleanup temp chunks
-      fs.unlinkSync(metaPath);
-      fs.rmdirSync(chunksDir);
+      // Wait for write stream to finish
+      await new Promise<void>((resolve) => writeStream.on('finish', resolve));
 
-      let fileUrl: string;
-      if (useCloudinary) {
-        // Wait for write stream to finish before uploading
-        await new Promise<void>((resolve) => writeStream.on('finish', resolve));
-        fileUrl = await uploadRawToCloudinary(destPath, safeFilename.replace(/\.[^/.]+$/, ''));
-        // Remove local assembled file after Cloudinary upload
+      // Stream the assembled file to GridFS
+      const readStream = fs.createReadStream(destPath);
+      let fileId;
+      try {
+        fileId = await GridFSService.uploadFromStream(
+          readStream,
+          filename,
+          mimetype,
+          roomId,
+          userId
+        );
+      } finally {
+        // Always clean up the temporary files
         try { fs.unlinkSync(destPath); } catch { /* ignore */ }
-      } else {
-        fileUrl = `/uploads/${safeFilename}`;
+        try { fs.unlinkSync(metaPath); } catch { /* ignore */ }
+        try { fs.rmdirSync(chunksDir); } catch { /* ignore */ }
       }
 
       let type = 'file';
@@ -269,9 +253,11 @@ export const handleChunkUpload = async (req: Request, res: Response, next: NextF
       else if (mimetype.startsWith('video/')) type = 'video';
       else if (mimetype.startsWith('audio/')) type = 'audio';
 
+      const fileUrl = `/api/upload/download/${fileId.toString()}`;
+
       res.status(200).json({
         success: true,
-        message: 'File fully uploaded and assembled.',
+        message: 'File fully uploaded and assembled to GridFS.',
         data: { url: fileUrl, filename, mimetype, size, type },
       });
     } else {

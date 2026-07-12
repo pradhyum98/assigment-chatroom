@@ -28,7 +28,7 @@ export const errorHandler = (
     message = err.message;
   } else if (err.name === 'ValidationError') {
     statusCode = 400;
-    message = 'Required fields are missing or invalid.';
+    message = 'ValidationError: ' + Object.values((err as any).errors || {}).map((e: any) => e.message).join(', ');
   } else if (err.name === 'CastError') {
     statusCode = 400;
     message = 'The requested resource ID is invalid.';

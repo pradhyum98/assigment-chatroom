@@ -14,7 +14,7 @@ export interface Room {
   isPrivate?: boolean;
   isOnline?: boolean;
   lastSeen?: string;
-  encryptedRoomKeys?: Record<string, string>;
+  encryptedRoomKeys?: Record<string, string | { encryptedKey: string; identityVersion: number }>;
   unreadCounts?: Record<string, number>;
   unreadCount?: number; // legacy/derived
   pinnedMessages?: any[];
