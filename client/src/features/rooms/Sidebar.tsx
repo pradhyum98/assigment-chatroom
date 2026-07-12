@@ -107,7 +107,8 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
   const getRoomKey = async (roomId: string, encryptedRoomKeys: any) => {
     try {
       const { secretStore } = await import('../../services/secretStore');
-      const encryptedKeyForMe = encryptedRoomKeys ? encryptedRoomKeys[user?._id || ''] : undefined;
+      const rawKey = encryptedRoomKeys ? encryptedRoomKeys[user?._id || ''] : undefined;
+      const encryptedKeyForMe = rawKey && typeof rawKey === 'object' ? rawKey.encryptedKey : rawKey;
       return await secretStore.getOrUnwrapRoomKey(roomId, encryptedKeyForMe);
     } catch (e) {
       console.error('Failed to decrypt room key in sidebar', e);
@@ -259,14 +260,20 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
     try {
       const roomKey = await CryptoService.generateRoomKey();
       const roomKeyBase64 = await CryptoService.exportRoomKey(roomKey);
-      const encryptedRoomKeys: Record<string, string> = {};
+      const encryptedRoomKeys: Record<string, { encryptedKey: string; identityVersion: number }> = {};
       const allParticipants = [user?._id, ...selectedFriends].filter(Boolean) as string[];
       const pubKeyMap: Record<string, string> = {};
       if (user?._id && user?.publicKey) pubKeyMap[user._id] = user.publicKey;
       friendsList.forEach((f) => { if (f.publicKey) pubKeyMap[f._id] = f.publicKey; });
       for (const pId of allParticipants) {
         const pubKey = pubKeyMap[pId];
-        if (pubKey) encryptedRoomKeys[pId] = await CryptoService.encryptRoomKeyForUser(roomKeyBase64, pubKey);
+        const participant = pId === user?._id ? user : friendsList.find((f) => f._id === pId);
+        if (pubKey) {
+          encryptedRoomKeys[pId] = {
+            encryptedKey: await CryptoService.encryptRoomKeyForUser(roomKeyBase64, pubKey),
+            identityVersion: participant?.identityVersion || 1,
+          };
+        }
       }
       const response = await api.post('/rooms', { roomName: newRoomName, participants: selectedFriends, encryptedRoomKeys });
       const createdRoom = response.data.data.room;
@@ -374,11 +381,26 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
     setActionLoading(friendId);
     try {
       const friend = friends.find((f) => f._id === friendId);
-      const roomKey = await CryptoService.generateRoomKey();
-      const roomKeyBase64 = await CryptoService.exportRoomKey(roomKey);
-      const encryptedRoomKeys: Record<string, string> = {};
-      if (user?.publicKey) encryptedRoomKeys[user._id] = await CryptoService.encryptRoomKeyForUser(roomKeyBase64, user.publicKey);
-      if (friend?.publicKey) encryptedRoomKeys[friendId] = await CryptoService.encryptRoomKeyForUser(roomKeyBase64, friend.publicKey);
+
+      // Build encryptedRoomKeys in the format the server schema expects:
+      // Record<userId, { encryptedKey: string; identityVersion: number }>
+      const encryptedRoomKeys: Record<string, { encryptedKey: string; identityVersion: number }> = {};
+
+      if (user?.publicKey && friend?.publicKey) {
+        // Both users have public keys — perform E2EE key setup
+        const roomKey = await CryptoService.generateRoomKey();
+        const roomKeyBase64 = await CryptoService.exportRoomKey(roomKey);
+        encryptedRoomKeys[user._id] = {
+          encryptedKey: await CryptoService.encryptRoomKeyForUser(roomKeyBase64, user.publicKey),
+          identityVersion: 1,
+        };
+        encryptedRoomKeys[friendId] = {
+          encryptedKey: await CryptoService.encryptRoomKeyForUser(roomKeyBase64, friend.publicKey),
+          identityVersion: 1,
+        };
+      }
+      // If either user lacks a public key, send empty keys — server allows {} default.
+
       const response = await api.post(`/rooms/dm/${friendId}`, { encryptedRoomKeys });
       const room = response.data.data.room;
       dispatch(addRoom(room));
@@ -545,7 +567,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
                 key={friend._id} 
                 className="friend-inline-row"
                 style={{ cursor: 'pointer' }}
-                onClick={() => alert("Profile screen is unimplemented.")}
+                onClick={() => handleStartDM(friend._id)}
               >
                 <div className="avatar-wrapper">
                   <div className="room-avatar">{friend.firstName.charAt(0).toUpperCase()}</div>

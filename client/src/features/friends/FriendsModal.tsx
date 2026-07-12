@@ -121,14 +121,20 @@ const FriendsModal: React.FC<FriendsModalProps> = ({ onClose }) => {
       const roomKeyBase64 = await CryptoService.exportRoomKey(roomKey);
 
       // 2. Encrypt for both current user and friend
-      const encryptedRoomKeys: Record<string, string> = {};
+      const encryptedRoomKeys: Record<string, { encryptedKey: string; identityVersion: number }> = {};
       
       if (currentUser?.publicKey) {
-        encryptedRoomKeys[currentUser._id] = await CryptoService.encryptRoomKeyForUser(roomKeyBase64, currentUser.publicKey);
+        encryptedRoomKeys[currentUser._id] = {
+          encryptedKey: await CryptoService.encryptRoomKeyForUser(roomKeyBase64, currentUser.publicKey),
+          identityVersion: (currentUser as any).identityVersion || 1,
+        };
       }
       
       if (friend?.publicKey) {
-        encryptedRoomKeys[friendId] = await CryptoService.encryptRoomKeyForUser(roomKeyBase64, friend.publicKey);
+        encryptedRoomKeys[friendId] = {
+          encryptedKey: await CryptoService.encryptRoomKeyForUser(roomKeyBase64, friend.publicKey),
+          identityVersion: (friend as any).identityVersion || 1,
+        };
       } else {
         console.warn('Friend has no public key, they will not be able to decrypt the room messages');
       }

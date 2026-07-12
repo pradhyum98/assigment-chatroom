@@ -251,7 +251,7 @@ export const selectVisibleMessages = (state: RootChatState, roomId: string, acco
           senderId: mut.payload.senderId,
           senderName: mut.payload.senderName,
           roomId: mut.roomId,
-          content: mut.payload.content,
+          content: mut.payload.displayContent ?? mut.payload.content,
           timestamp: mut.payload.timestamp,
           type: mut.payload.type,
           replyTo: mut.payload.replyTo,

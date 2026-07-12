@@ -12,28 +12,28 @@ export class CryptoRevalidationService {
   async validate(item: OutboxItem): Promise<{ isValid: boolean; needsReencryption: boolean }> {
     const accountId = this.db.getAccountId();
     
-    // 1. Check if room is accessible
+    // 1. Check room projection in IDB.
+    // If no projection exists yet (IDB bootstrap not complete), allow the send —
+    // the server socket handler is the authoritative access gatekeeper.
     const room = await this.db.get<any>('room_projections', [accountId, item.roomId]);
-    if (!room || room.syncState === 'ACCESS_REVOKED') {
+    
+    // Only block if we explicitly know access is revoked. Missing projection = allow.
+    if (room && room.syncState === 'ACCESS_REVOKED') {
       return { isValid: false, needsReencryption: false };
     }
 
-    // 2. Check if identity has changed
+    // 2. Check if identity has changed (only if projection is present)
     const currentIdentityVersion = 1; // get from user projection
-    if (item.requiredIdentityVersion !== undefined && item.requiredIdentityVersion !== currentIdentityVersion) {
+    if (room && item.requiredIdentityVersion !== undefined && item.requiredIdentityVersion !== currentIdentityVersion) {
       return { isValid: false, needsReencryption: true };
     }
 
-    // 3. Check if room key has rotated
-    if (item.requiredRoomKeyVersion !== undefined && item.requiredRoomKeyVersion !== room.roomKeyVersion) {
+    // 3. Check if room key has rotated (only if projection is present)
+    if (room && item.requiredRoomKeyVersion !== undefined && item.requiredRoomKeyVersion !== room.roomKeyVersion) {
       return { isValid: true, needsReencryption: true };
     }
 
-    // 4. Check membership revision (e.g. if we are allowed to send now)
-    if (item.requiredMembershipRevision !== undefined && item.requiredMembershipRevision !== room.membershipRevision) {
-      // Membership changed, but we might still have access. We might just need to update the envelope.
-      // But strictly, if membership changes, a key rotation should have happened. So covered by #3.
-    }
+    // 4. Membership revision check covered by key rotation check above.
 
     return { isValid: true, needsReencryption: false };
   }

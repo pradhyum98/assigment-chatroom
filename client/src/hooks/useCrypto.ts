@@ -7,9 +7,12 @@ import { secretStore } from '../services/secretStore';
 export const useCrypto = () => {
   const { user } = useAppSelector((state) => state.auth);
 
-  const getRoomKey = useCallback(async (roomId: string, encryptedRoomKeys?: Record<string, string>): Promise<CryptoKey | null> => {
+  const getRoomKey = useCallback(async (roomId: string, encryptedRoomKeys?: Record<string, any>): Promise<CryptoKey | null> => {
     if (!user?._id) return null;
-    const encryptedKeyForMe = encryptedRoomKeys ? encryptedRoomKeys[user._id] : undefined;
+    const raw = encryptedRoomKeys ? encryptedRoomKeys[user._id] : undefined;
+    // Server stores { encryptedKey, identityVersion } — extract the string, or use directly if legacy plain string
+    const encryptedKeyForMe: string | undefined =
+      raw && typeof raw === 'object' ? raw.encryptedKey : raw;
     return await secretStore.getOrUnwrapRoomKey(roomId, encryptedKeyForMe);
   }, [user?._id]);
 

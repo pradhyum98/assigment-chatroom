@@ -30,6 +30,7 @@ export interface SendMessagePayload {
   senderId: string;
   senderName: string;
   content: string;
+  displayContent?: string;
   timestamp: string;
   type: 'text' | 'image' | 'video' | 'audio' | 'file' | 'voice';
   iv?: string;

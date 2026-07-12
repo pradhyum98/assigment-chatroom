@@ -36,6 +36,22 @@ class SocketService {
       timeout: 20000,
     });
 
+    this.socket.on('connect', () => {
+      console.log('[SocketService] Connected:', this.socket?.id);
+    });
+
+    this.socket.on('connect_error', (err) => {
+      console.error('[SocketService] Connect error:', err.message);
+    });
+
+    this.socket.on('disconnect', (reason) => {
+      console.warn('[SocketService] Disconnected:', reason);
+    });
+
+    this.socket.on('socket_error', (payload) => {
+      console.error('[SocketService] Server socket_error:', payload);
+    });
+
     // B1: Handle server-initiated forced disconnect.
     // Server emits 'force_disconnect' BEFORE calling socket.disconnect(true),
     // giving the client a chance to clear credentials cleanly.
@@ -84,9 +100,17 @@ class SocketService {
   }
 
   sendMessage(data: any, callback?: (response: any) => void) {
-    if (this.socket) {
-      this.socket.emit('send_message', data, callback);
+    const socket = this.socket || this.connect();
+    if (socket) {
+      socket.emit('send_message', data, callback);
+      return;
     }
+    callback?.({
+      ok: false,
+      clientMsgId: data?.clientMsgId || '',
+      errorCode: 'SOCKET_NOT_INITIALIZED',
+      retryable: true,
+    });
   }
 
   leaveRoom(roomId: string) {
