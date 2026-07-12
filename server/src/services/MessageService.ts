@@ -41,130 +41,161 @@ export class MessageService {
       email: string;
     }
   ) {
-    return RoomEventService.executeMutation(async (session) => {
-      // 1. Re-read mutable state
-      const room = await ChatRoom.findOne({ roomId: payload.roomId }).session(session);
-      if (!room) throw new Error('NOT_MEMBER');
+    try {
+      return await RoomEventService.executeMutation(async (session) => {
+        // 1. Re-read mutable state
+        const room = await ChatRoom.findOne({ roomId: payload.roomId }).session(session);
+        if (!room) throw new Error('NOT_MEMBER');
 
-      const user = await User.findById(payload.senderId).session(session);
-      if (!user) throw new Error('User not found');
+        const user = await User.findById(payload.senderId).session(session);
+        if (!user) throw new Error('User not found');
 
-      // 2. Authorize actor
-      const isParticipant = room.participants.some(p => p.toString() === payload.senderId);
-      if (!isParticipant) throw new Error('NOT_MEMBER');
+        // 2. Authorize actor
+        const isParticipant = room.participants.some(p => p.toString() === payload.senderId);
+        if (!isParticipant) throw new Error('NOT_MEMBER');
 
-      if (room.cryptoState === 'ROTATION_REQUIRED') {
-        throw new Error('ROTATION_REQUIRED');
-      }
+        if (room.cryptoState === 'ROTATION_REQUIRED') {
+          throw new Error('ROTATION_REQUIRED');
+        }
 
-      if (payload.senderIdentityVersion !== (user.identityVersion || 1)) {
-        logger.info(`Message Creation Blocked: ${context.email} attempted to send message to room ${payload.roomId} with stale identity. (clientMsgId: ${payload.clientMsgId})`);
-        throw new Error('STALE_IDENTITY');
-      }
+        if (payload.senderIdentityVersion !== (user.identityVersion || 1)) {
+          logger.info(`Message Creation Blocked: ${context.email} attempted to send message to room ${payload.roomId} with stale identity. (clientMsgId: ${payload.clientMsgId})`);
+          throw new Error('STALE_IDENTITY');
+        }
 
-      if (payload.roomKeyVersion !== (room.roomKeyVersion || 1)) {
-        logger.info(`Message Creation Blocked: ${context.email} attempted to send message to room ${payload.roomId} with stale room key. (clientMsgId: ${payload.clientMsgId})`);
-        throw new Error('STALE_ROOM_KEY');
-      }
+        if (payload.roomKeyVersion !== (room.roomKeyVersion || 1)) {
+          logger.info(`Message Creation Blocked: ${context.email} attempted to send message to room ${payload.roomId} with stale room key. (clientMsgId: ${payload.clientMsgId})`);
+          throw new Error('STALE_ROOM_KEY');
+        }
 
-      // Idempotency check via clientMsgId
-      const existingMessage = await Message.findOne({ senderId: payload.senderId, clientMsgId: payload.clientMsgId })
-        .populate('replyTo', 'messageId senderId senderName content type timestamp')
-        .session(session);
+        // Idempotency check via clientMsgId
+        const existingMessage = await Message.findOne({ senderId: payload.senderId, clientMsgId: payload.clientMsgId })
+          .populate('replyTo', 'messageId senderId senderName content type timestamp')
+          .session(session);
+          
+        if (existingMessage) {
+          return { result: existingMessage, events: [] };
+        }
+
+        // Reply-to resolution
+        let replyToId: mongoose.Types.ObjectId | undefined;
+        if (payload.replyTo) {
+          let referenced = null;
+          if (mongoose.Types.ObjectId.isValid(payload.replyTo)) {
+            referenced = await Message.findById(payload.replyTo).session(session);
+          } else {
+            referenced = await Message.findOne({ messageId: payload.replyTo }).session(session);
+          }
+          if (referenced && referenced.roomId === payload.roomId) {
+            replyToId = referenced._id as mongoose.Types.ObjectId;
+          }
+        }
+
+        // 3. Allocate sequence
+        const startSequence = await SequenceService.allocateRoomSequence(payload.roomId, 1, session);
+
+        // 4. Domain mutation
+        const message = new Message({
+          messageId: uuidv4(),
+          senderId: payload.senderId,
+          senderName: payload.senderName,
+          roomId: payload.roomId,
+          type: payload.type,
+          content: payload.content || '',
+          iv: payload.iv,
+          timestamp: new Date(),
+          replyTo: replyToId,
+          reactions: [],
+          deliveredTo: [],
+          readBy: [],
+          clientMsgId: payload.clientMsgId,
+          encryptionVersion: payload.encryptionVersion,
+          wrappedMediaKey: payload.wrappedMediaKey,
+          mediaKeyIv: payload.mediaKeyIv,
+          roomKeyVersion: payload.roomKeyVersion,
+          roomSequenceNumber: startSequence,
+          mediaUrl: payload.mediaUrl,
+          mediaFilename: payload.mediaFilename,
+          mediaMimeType: payload.mediaMimeType,
+          mediaSize: payload.mediaSize,
+          thumbnailUrl: payload.thumbnailUrl,
+          mediaKey: payload.mediaKey,
+          mediaIv: payload.mediaIv,
+        });
+
+        await message.save({ session });
+
+        // Update GridFS file metadata status to COMMITTED
+        if (payload.mediaUrl && payload.mediaUrl.startsWith('/api/upload/download/')) {
+          const fileId = payload.mediaUrl.split('/').pop();
+          if (fileId && mongoose.Types.ObjectId.isValid(fileId)) {
+            const conn = mongoose.connection;
+            if (conn.db) {
+              await conn.db.collection('encrypted_media.files').updateOne(
+                { _id: new mongoose.Types.ObjectId(fileId) },
+                { $set: { 'metadata.status': 'COMMITTED' } },
+                { session }
+              );
+            }
+          }
+        }
+
+        const populated = await message.populate('replyTo', 'messageId senderId senderName content type');
+
+        // Update room metadata
+        let previewText = payload.content || '';
+        if (payload.type !== 'text') {
+          previewText = `[Attachment: ${payload.type}]`;
+        }
         
-      if (existingMessage) {
-        return { result: existingMessage, events: [] };
-      }
+        const unreadIncrements: Record<string, number> = {};
+        room.participants.forEach(pid => {
+          if (pid.toString() !== payload.senderId) {
+            unreadIncrements[`unreadCounts.${pid.toString()}`] = 1;
+          }
+        });
+        
+        await ChatRoom.updateOne(
+          { roomId: payload.roomId },
+          { 
+            previewText, 
+            lastMessage: message._id, 
+            updatedAt: new Date(),
+            $inc: unreadIncrements 
+          },
+          { session }
+        );
 
-      // Reply-to resolution
-      let replyToId: mongoose.Types.ObjectId | undefined;
-      if (payload.replyTo) {
-        let referenced = null;
-        if (mongoose.Types.ObjectId.isValid(payload.replyTo)) {
-          referenced = await Message.findById(payload.replyTo).session(session);
-        } else {
-          referenced = await Message.findOne({ messageId: payload.replyTo }).session(session);
-        }
-        if (referenced && referenced.roomId === payload.roomId) {
-          replyToId = referenced._id as mongoose.Types.ObjectId;
-        }
-      }
+        // 5. Construct RoomEvent
+        const event = new RoomEvent({
+          roomId: payload.roomId,
+          sequenceNumber: startSequence,
+          eventType: RoomEventType.MESSAGE_CREATED,
+          eventVersion: 1,
+          actorId: payload.senderId,
+          payload: {
+            message: populated.toObject(),
+            clientMsgId: payload.clientMsgId
+          }
+        });
 
-      // 3. Allocate sequence
-      const startSequence = await SequenceService.allocateRoomSequence(payload.roomId, 1, session);
-
-      // 4. Domain mutation
-      const message = new Message({
-        messageId: uuidv4(),
-        senderId: payload.senderId,
-        senderName: payload.senderName,
-        roomId: payload.roomId,
-        type: payload.type,
-        content: payload.content || '',
-        iv: payload.iv,
-        timestamp: new Date(),
-        replyTo: replyToId,
-        reactions: [],
-        deliveredTo: [],
-        readBy: [],
-        clientMsgId: payload.clientMsgId,
-        encryptionVersion: payload.encryptionVersion,
-        wrappedMediaKey: payload.wrappedMediaKey,
-        mediaKeyIv: payload.mediaKeyIv,
-        roomKeyVersion: payload.roomKeyVersion,
-        roomSequenceNumber: startSequence,
-        mediaUrl: payload.mediaUrl,
-        mediaFilename: payload.mediaFilename,
-        mediaMimeType: payload.mediaMimeType,
-        mediaSize: payload.mediaSize,
-        thumbnailUrl: payload.thumbnailUrl,
-        mediaKey: payload.mediaKey,
-        mediaIv: payload.mediaIv,
+        return { result: populated, events: [event] };
       });
-
-      await message.save({ session });
-
-      const populated = await message.populate('replyTo', 'messageId senderId senderName content type');
-
-      // Update room metadata
-      let previewText = payload.content || '';
-      if (payload.type !== 'text') {
-        previewText = `[Attachment: ${payload.type}]`;
+    } catch (error) {
+      if (payload.mediaUrl && payload.mediaUrl.startsWith('/api/upload/download/')) {
+        const fileId = payload.mediaUrl.split('/').pop();
+        if (fileId) {
+          try {
+            const { GridFSService } = await import('./GridFSService');
+            // Safe deletion: only delete if the current sender/uploader owns the file
+            await GridFSService.deleteFileIfOwner(fileId, payload.senderId);
+          } catch (deleteErr: any) {
+            logger.error(`[GridFS] Failed to delete orphaned file ${fileId}: ${deleteErr.message}`);
+          }
+        }
       }
-      
-      const unreadIncrements: Record<string, number> = {};
-      room.participants.forEach(pid => {
-        if (pid.toString() !== payload.senderId) {
-          unreadIncrements[`unreadCounts.${pid.toString()}`] = 1;
-        }
-      });
-      
-      await ChatRoom.updateOne(
-        { roomId: payload.roomId },
-        { 
-          previewText, 
-          lastMessage: message._id, 
-          updatedAt: new Date(),
-          $inc: unreadIncrements 
-        },
-        { session }
-      );
-
-      // 5. Construct RoomEvent
-      const event = new RoomEvent({
-        roomId: payload.roomId,
-        sequenceNumber: startSequence,
-        eventType: RoomEventType.MESSAGE_CREATED,
-        eventVersion: 1,
-        actorId: payload.senderId,
-        payload: {
-          message: populated.toObject(),
-          clientMsgId: payload.clientMsgId
-        }
-      });
-
-      return { result: populated, events: [event] };
-    });
+      throw error;
+    }
   }
 
   static async editMessage(
@@ -245,11 +276,34 @@ export class MessageService {
 
       await SequenceService.assertUniqueMutation(payload.mutationId, 'DELETE_MESSAGE', session, roomId, payload.senderId);
 
+      const mediaUrlToDelete = msg.mediaUrl;
       msg.deletedForEveryone = true;
       msg.deletedAt = new Date();
       msg.content = '';
       msg.mediaUrl = undefined;
       await msg.save({ session });
+
+      // Clean up GridFS file if it was deleted for everyone and is no longer referenced
+      if (mediaUrlToDelete && mediaUrlToDelete.startsWith('/api/upload/download/')) {
+        const fileId = mediaUrlToDelete.split('/').pop();
+        if (fileId && mongoose.Types.ObjectId.isValid(fileId)) {
+          // Check if any other message references this file
+          const count = await Message.countDocuments({
+            mediaUrl: mediaUrlToDelete,
+            messageId: { $ne: msg.messageId }
+          }).session(session);
+          
+          if (count === 0) {
+            try {
+              const { GridFSService } = await import('./GridFSService');
+              // Ensure only the owner can trigger delete
+              await GridFSService.deleteFileIfOwner(fileId, payload.senderId);
+            } catch (deleteErr: any) {
+              logger.error(`[GridFS] Failed to delete file ${fileId} during deleteMessage: ${deleteErr.message}`);
+            }
+          }
+        }
+      }
 
       const startSequence = await SequenceService.allocateRoomSequence(roomId, 1, session);
       msg.roomSequenceNumber = startSequence;

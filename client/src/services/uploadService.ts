@@ -16,6 +16,7 @@ export class UploadService {
    */
   static async uploadFileResumable(
     file: File,
+    roomId: string,
     onProgress?: (pct: number) => void
   ): Promise<{
     success: boolean;
@@ -50,6 +51,7 @@ export class UploadService {
         filename: file.name,
         size: file.size,
         mimetype: file.type || 'application/octet-stream',
+        roomId,
       });
       
       // Save checkpoint in IndexedDB
@@ -74,6 +76,7 @@ export class UploadService {
       formData.append('uploadId', uploadId);
       formData.append('chunkIndex', i.toString());
       formData.append('totalChunks', totalChunks.toString());
+      formData.append('roomId', roomId);
 
       console.log(`[UploadService] Uploading chunk ${i + 1}/${totalChunks}...`);
       
