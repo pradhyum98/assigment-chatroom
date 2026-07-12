@@ -45,15 +45,19 @@ export const RoomMetadataChangedSchema = z.object({
 });
 
 export const MembershipChangedSchema = z.object({
-  userId: z.string(),
-  action: z.enum(['joined', 'left', 'added', 'removed']),
-  actorId: z.string(),
+  userId: z.string().optional(),
+  memberId: z.string().optional(),
+  memberIds: z.array(z.string()).optional(),
+  action: z.enum(['joined', 'left', 'added', 'removed', 'JOINED', 'LEFT', 'ADDED', 'REMOVED']),
+  actorId: z.string().optional(),
+  membershipRevision: z.number().optional(),
 });
 
 export const AdminChangedSchema = z.object({
-  userId: z.string(),
-  action: z.enum(['promoted', 'demoted']),
-  actorId: z.string(),
+  userId: z.string().optional(),
+  memberId: z.string().optional(),
+  action: z.enum(['promoted', 'demoted', 'PROMOTED', 'DEMOTED']),
+  actorId: z.string().optional(),
 });
 
 export const PinnedMessagesChangedSchema = z.object({
