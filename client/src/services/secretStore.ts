@@ -72,4 +72,7 @@ class SecretStore {
 }
 
 export const secretStore = new SecretStore();
+if (typeof window !== 'undefined') {
+  (window as any).secretStore = secretStore;
+}
 export default secretStore;
