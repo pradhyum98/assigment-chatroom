@@ -90,6 +90,7 @@ router.get('/download/:fileId', async (req: AuthRequest, res: Response, next: Ne
 
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Content-Type', file.contentType || 'application/octet-stream');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
 
     // Retrieve and pipe the download stream
     const { stream } = await GridFSService.downloadStream(fileId, range);
