@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
-const buildProfile = process.env.APP_BUILD_PROFILE || 'emulator';
-const scheme = (buildProfile === 'production') ? 'https' : 'http';
+const buildProfile = process.env.APP_BUILD_PROFILE || 'production';
+const scheme = (buildProfile === 'emulator') ? 'http' : 'https';
 
 const config: CapacitorConfig = {
   appId: 'com.securechat.pwa',
