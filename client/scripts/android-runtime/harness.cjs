@@ -224,7 +224,7 @@ async function executeAction(action, args) {
                   url: window.location.href,
                   localStorageKeys: Object.keys(localStorage),
                   hasSession: localStorage.getItem('hasSession'),
-                  isLoggedIn: !!document.querySelector('.room-sidebar')
+                  isLoggedIn: !!document.querySelector('.sidebar')
                 };
               })()
             `);
