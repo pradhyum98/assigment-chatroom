@@ -52,6 +52,9 @@ export interface Message {
   mediaSize?: number;
   mediaKey?: string;
   mediaIv?: string;
+  encryptionVersion?: number;
+  wrappedMediaKey?: string;
+  mediaKeyIv?: string;
   isOptimistic?: boolean;
   isEdited?: boolean;
   isDeleted?: boolean;
@@ -259,6 +262,11 @@ export const selectVisibleMessages = (state: RootChatState, roomId: string, acco
           mediaFilename: mut.payload.mediaFilename,
           mediaMimeType: mut.payload.mediaMimeType,
           mediaSize: mut.payload.mediaSize,
+          mediaKey: (mut.payload as any).mediaKey,
+          mediaIv: (mut.payload as any).mediaIv,
+          encryptionVersion: (mut.payload as any).encryptionVersion,
+          wrappedMediaKey: (mut.payload as any).wrappedMediaKey,
+          mediaKeyIv: (mut.payload as any).mediaKeyIv,
           isOptimistic: true,
         });
       }

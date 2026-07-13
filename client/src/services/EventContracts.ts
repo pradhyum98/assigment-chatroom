@@ -132,10 +132,17 @@ export const RoomKeyRotatedSchema = z.object({
 // -- User Event Schemas
 export const RoomAccessGrantedSchema = z.object({
   roomId: z.string(),
-  membershipRevision: z.number(),
-  roomKeyVersion: z.number(),
-  encryptedRoomKey: z.string(),
+  membershipRevision: z.number().optional().default(1),
+  roomKeyVersion: z.number().optional().default(1),
+  encryptedRoomKey: z.string().optional(),
   roomData: z.any().optional(),
+  roomName: z.string().optional(),
+  isDM: z.boolean().optional(),
+  isPrivate: z.boolean().optional(),
+  avatarColor: z.string().optional(),
+  previewText: z.string().optional(),
+  participants: z.array(z.string()).optional(),
+  encryptedRoomKeys: z.any().optional(),
 });
 
 export const RoomAccessRevokedSchema = z.object({

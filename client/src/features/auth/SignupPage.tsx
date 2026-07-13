@@ -5,6 +5,7 @@ import { loginStart, loginSuccess, loginFailure } from './authSlice';
 import api from '../../services/api';
 import { CryptoService } from '../../services/cryptoService';
 import { secretStore } from '../../services/secretStore';
+import { SecureKeyWrapper } from '../../services/secureKeyWrapper';
 import './Auth.css';
 
 const SignupPage: React.FC = () => {
@@ -45,6 +46,11 @@ const SignupPage: React.FC = () => {
 
       const payload = { ...formData, publicKey, encryptedPrivateKey };
       const response = await api.post('/auth/signup', payload);
+
+      // Wrap E2EE private key bound to device!
+      SecureKeyWrapper.incrementSession();
+      await SecureKeyWrapper.wrapAndStorePrivateKey(response.data.data.user._id, response.data.data.user.identityVersion || 1, keyPair.privateKey);
+
       dispatch(loginSuccess(response.data.data));
       navigate('/', { replace: true });
     } catch (err: any) {

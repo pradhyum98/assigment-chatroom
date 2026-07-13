@@ -121,7 +121,7 @@ const roomsSlice = createSlice({
     updatePresence: (state, action: PayloadAction<{ userId: string; isOnline: boolean; lastSeen: string }>) => {
       state.rooms.forEach(room => {
         if (room.isDM) {
-          const isOtherParticipant = room.participants?.some(p => p._id === action.payload.userId);
+          const isOtherParticipant = room.participants?.some(p => (typeof p === 'string' ? p : p._id) === action.payload.userId);
           if (isOtherParticipant) {
             room.isOnline = action.payload.isOnline;
             room.lastSeen = action.payload.lastSeen;
@@ -129,7 +129,7 @@ const roomsSlice = createSlice({
         }
       });
       if (state.currentRoom?.isDM) {
-        const isOtherParticipant = state.currentRoom.participants?.some(p => p._id === action.payload.userId);
+        const isOtherParticipant = state.currentRoom.participants?.some(p => (typeof p === 'string' ? p : p._id) === action.payload.userId);
         if (isOtherParticipant) {
           state.currentRoom.isOnline = action.payload.isOnline;
           state.currentRoom.lastSeen = action.payload.lastSeen;

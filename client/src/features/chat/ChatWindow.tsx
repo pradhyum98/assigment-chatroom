@@ -45,6 +45,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
   const dispatch = useAppDispatch();
   const { rooms, currentRoom } = useAppSelector((state) => state.rooms);
   const { user } = useAppSelector((state) => state.auth);
+  const { friends } = useAppSelector((state) => state.friends);
   const { messages, typingUsers } = useAppSelector((state) => state.chat);
   const visibleMessages = useAppSelector((state) =>
     currentRoom ? selectVisibleMessages(state, currentRoom.roomId, user?._id) : []
@@ -78,10 +79,93 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
   const [showHeaderMenu, setShowHeaderMenu] = useState(false);
   const [failedMedia, setFailedMedia] = useState<Record<string, boolean>>({});
 
+  const [decryptedUrls, setDecryptedUrls] = useState<Record<string, string>>({});
+  const decryptedUrlsRef = useRef<Record<string, string>>({});
+  const [isNetworkOnline, setIsNetworkOnline] = useState(navigator.onLine);
+
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const scrollStateRef = useRef({ prevScrollHeight: 0, prevScrollTop: 0, adjustScroll: false });
   const lastRoomIdRef = useRef<string | null>(null);
   const createdObjectUrlsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    const handleOnline = () => setIsNetworkOnline(true);
+    const handleOffline = () => setIsNetworkOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!currentRoom || !messages.length) return;
+
+    const decryptNewMedia = async () => {
+      const roomKey = await getRoomKey(currentRoom.roomId, currentRoom.encryptedRoomKeys);
+      if (!roomKey) return;
+
+      let updated = false;
+      const newUrls = { ...decryptedUrlsRef.current };
+
+      for (const msg of messages as any[]) {
+        const cacheKey = msg.clientMsgId || msg.messageId || msg._id;
+        if (!cacheKey) continue;
+
+        const hasMedia = msg.type !== 'text' && msg.mediaUrl && 
+          ((msg.encryptionVersion === 2 && msg.wrappedMediaKey && msg.mediaKeyIv && msg.mediaIv) || 
+           (msg.mediaKey && msg.mediaIv));
+
+        if (hasMedia && !msg.decryptedMediaUrl && !newUrls[cacheKey] && !failedMedia[cacheKey]) {
+          try {
+            const activeToken = getAccessToken();
+            const headers: Record<string, string> = {};
+            if (activeToken) {
+              headers['Authorization'] = `Bearer ${activeToken}`;
+            }
+            const fileRes = await fetch(getMediaUrl(msg.mediaUrl || ''), { headers });
+            const encryptedBlob = await fileRes.blob();
+            
+            let fileKey: any;
+            if (msg.encryptionVersion === 2) {
+              fileKey = await CryptoService.unwrapMediaKey(
+                msg.wrappedMediaKey,
+                msg.mediaKeyIv,
+                roomKey,
+                {
+                  roomId: currentRoom.roomId,
+                  clientMsgId: msg.clientMsgId,
+                  encryptionVersion: 2
+                }
+              );
+            } else {
+              fileKey = msg.mediaKey;
+            }
+
+            const objectUrl = await CryptoService.decryptFile(
+              encryptedBlob,
+              fileKey,
+              msg.mediaIv || msg.mediaKeyIv,
+              msg.mediaMimeType || 'application/octet-stream'
+            );
+            createdObjectUrlsRef.current.push(objectUrl);
+            newUrls[cacheKey] = objectUrl;
+            updated = true;
+          } catch (e) {
+            console.error('Failed to decrypt incoming media', cacheKey, e);
+          }
+        }
+      }
+
+      if (updated) {
+        decryptedUrlsRef.current = newUrls;
+        setDecryptedUrls(newUrls);
+      }
+    };
+
+    decryptNewMedia();
+  }, [messages, currentRoom, failedMedia, isNetworkOnline]);
 
   useEffect(() => {
     const handleOutsideClick = () => {
@@ -138,6 +222,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
   }, [currentRoom?.roomId]);
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFileBuffer, setSelectedFileBuffer] = useState<ArrayBuffer | null>(null);
   const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
@@ -153,7 +238,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
     };
   }, [filePreviewUrl]);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -163,23 +248,43 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
       return;
     }
 
-    setSelectedFile(file);
-    if (file.type.startsWith('image/') || file.type.startsWith('video/') || file.type.startsWith('audio/')) {
-      const url = URL.createObjectURL(file);
-      setFilePreviewUrl(url);
-    } else {
-      setFilePreviewUrl(null);
+    try {
+      const buffer = await new Promise<ArrayBuffer>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as ArrayBuffer);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsArrayBuffer(file);
+      });
+      setSelectedFile(file);
+      setSelectedFileBuffer(buffer);
+
+      if (file.type.startsWith('image/') || file.type.startsWith('video/') || file.type.startsWith('audio/')) {
+        const url = URL.createObjectURL(file);
+        setFilePreviewUrl(url);
+      } else {
+        setFilePreviewUrl(null);
+      }
+    } catch (err) {
+      console.error('Failed to read file immediately:', err);
+      alert('Failed to read file due to permission problems. Please try selecting the file again.');
     }
   };
 
   const cancelFileSelection = () => {
     setSelectedFile(null);
+    setSelectedFileBuffer(null);
     if (filePreviewUrl) {
       URL.revokeObjectURL(filePreviewUrl);
       setFilePreviewUrl(null);
     }
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
+    }
+    if (imageInputRef.current) {
+      imageInputRef.current.value = '';
+    }
+    if (videoInputRef.current) {
+      videoInputRef.current.value = '';
     }
   };
   
@@ -189,12 +294,19 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
 
+  const getOtherParticipant = () => {
+    if (!currentRoom || !currentRoom.isDM) return null;
+    const otherParticipantRaw = currentRoom.participants?.find(
+      (p: any) => (typeof p === 'string' ? p : p._id) !== user?._id
+    );
+    const otherParticipantId = typeof otherParticipantRaw === 'string' ? otherParticipantRaw : otherParticipantRaw?._id;
+    return otherParticipantId ? (friends.find((f: any) => f._id === otherParticipantId) || (typeof otherParticipantRaw === 'object' ? otherParticipantRaw : null)) : null;
+  };
+
   const getRoomDisplayName = () => {
     if (!currentRoom) return '';
     if (currentRoom.isDM) {
-      const otherParticipant = currentRoom.participants?.find(
-        (p: any) => p._id !== user?._id
-      );
+      const otherParticipant = getOtherParticipant();
       return otherParticipant
         ? `${otherParticipant.firstName} ${otherParticipant.lastName}`
         : 'Direct Message';
@@ -212,9 +324,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
       alert('Calls are only available in Direct Messages for now.');
       return;
     }
-    const otherParticipant = currentRoom.participants?.find(
-      (p: any) => p._id !== user?._id
-    );
+    const otherParticipant = getOtherParticipant();
     if (!otherParticipant) return;
     
     startCall(
@@ -230,9 +340,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
       alert('Calls are only available in Direct Messages for now.');
       return;
     }
-    const otherParticipant = currentRoom.participants?.find(
-      (p: any) => p._id !== user?._id
-    );
+    const otherParticipant = getOtherParticipant();
     if (!otherParticipant) return;
     
     startCall(
@@ -272,7 +380,12 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
 
             if (hasMedia) {
               try {
-                const fileRes = await fetch(getMediaUrl(msg.mediaUrl));
+                const activeToken = getAccessToken();
+                const headers: Record<string, string> = {};
+                if (activeToken) {
+                  headers['Authorization'] = `Bearer ${activeToken}`;
+                }
+                const fileRes = await fetch(getMediaUrl(msg.mediaUrl), { headers });
                 const encryptedBlob = await fileRes.blob();
                 
                 let fileKey: any;
@@ -388,7 +501,12 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
 
           if (hasMedia) {
             try {
-              const fileRes = await fetch(getMediaUrl(msg.mediaUrl));
+              const activeToken = getAccessToken();
+              const headers: Record<string, string> = {};
+              if (activeToken) {
+                headers['Authorization'] = `Bearer ${activeToken}`;
+              }
+              const fileRes = await fetch(getMediaUrl(msg.mediaUrl), { headers });
               const encryptedBlob = await fileRes.blob();
               
               let fileKey: any;
@@ -638,7 +756,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
       if (selectedFile) {
         setIsUploading(true);
         // Encrypt the file before uploading
-        const { encryptedBlob, fileKey, ivBase64 } = await CryptoService.encryptFile(selectedFile);
+        const { encryptedBlob, fileKey, ivBase64 } = await CryptoService.encryptFile(selectedFileBuffer || selectedFile);
         
         // Convert Blob to File to upload
         const encryptedFileToUpload = new (window as any).File([encryptedBlob], selectedFile.name, { type: 'application/octet-stream' }) as File;
@@ -1093,6 +1211,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
         {filteredMessages.map((msg: any, idx: number) => {
           const isSentByMe = msg.senderId === user?._id;
           const isDeleted = msg.deletedForEveryone;
+          const cacheKey = msg.clientMsgId || msg.messageId || msg._id;
           
           if (!isSentByMe && msg.deletedAt && !msg.deletedForEveryone) return null; // Soft deleted for other, ignore here since we only soft delete for self in UI usually
 
@@ -1130,82 +1249,104 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
                       </div>
                     )}
                     {msg.type === 'image' && msg.mediaUrl && (
-                      failedMedia[msg.messageId || msg._id] ? (
+                      failedMedia[cacheKey] ? (
                         <div className="media-error-placeholder" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px', backgroundColor: 'rgba(239, 68, 68, 0.08)', borderRadius: '8px', color: '#ef4444', fontSize: '13px' }}>
                           <AlertTriangle size={16} />
                           <span>Photo unavailable</span>
                         </div>
-                      ) : (
-                        <div className="media-wrapper" onClick={() => setActiveImageView(msg.decryptedMediaUrl || getMediaUrl(msg.mediaUrl))} style={{ cursor: 'pointer' }}>
+                      ) : (msg.decryptedMediaUrl || decryptedUrls[cacheKey]) ? (
+                        <div className="media-wrapper" onClick={() => setActiveImageView(msg.decryptedMediaUrl || decryptedUrls[cacheKey])} style={{ cursor: 'pointer' }}>
                           <img 
-                            src={msg.decryptedMediaUrl || getMediaUrl(msg.mediaUrl)} 
+                            src={msg.decryptedMediaUrl || decryptedUrls[cacheKey]} 
                             alt="Photo" 
                             className="message-image" 
                             loading="lazy"
-                            onError={() => setFailedMedia(prev => ({ ...prev, [msg.messageId || msg._id]: true }))}
+                            onError={() => setFailedMedia(prev => ({ ...prev, [cacheKey]: true }))}
                           />
+                        </div>
+                      ) : (
+                        <div className="media-loading-placeholder" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px', backgroundColor: 'rgba(0, 0, 0, 0.04)', borderRadius: '8px', color: '#64748b', fontSize: '13px' }}>
+                          <div className="loading-spinner-small" style={{ width: '14px', height: '14px', border: '2px solid #cbd5e1', borderTopColor: '#64748b', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+                          <span>Decrypting photo...</span>
                         </div>
                       )
                     )}
                     {msg.type === 'video' && msg.mediaUrl && (
-                      failedMedia[msg.messageId || msg._id] ? (
+                      failedMedia[cacheKey] ? (
                         <div className="media-error-placeholder" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px', backgroundColor: 'rgba(239, 68, 68, 0.08)', borderRadius: '8px', color: '#ef4444', fontSize: '13px' }}>
                           <AlertTriangle size={16} />
                           <span>Video unavailable</span>
                         </div>
-                      ) : (
+                      ) : (msg.decryptedMediaUrl || decryptedUrls[cacheKey]) ? (
                         <div className="media-wrapper">
                           <video 
-                            src={msg.decryptedMediaUrl || getMediaUrl(msg.mediaUrl)} 
+                            src={msg.decryptedMediaUrl || decryptedUrls[cacheKey]} 
                             controls 
                             className="message-video" 
-                            onError={() => setFailedMedia(prev => ({ ...prev, [msg.messageId || msg._id]: true }))}
+                            onError={() => setFailedMedia(prev => ({ ...prev, [cacheKey]: true }))}
                           />
+                        </div>
+                      ) : (
+                        <div className="media-loading-placeholder" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px', backgroundColor: 'rgba(0, 0, 0, 0.04)', borderRadius: '8px', color: '#64748b', fontSize: '13px' }}>
+                          <div className="loading-spinner-small" style={{ width: '14px', height: '14px', border: '2px solid #cbd5e1', borderTopColor: '#64748b', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+                          <span>Decrypting video...</span>
                         </div>
                       )
                     )}
                     {msg.type === 'audio' && msg.mediaUrl && (
-                      failedMedia[msg.messageId || msg._id] ? (
+                      failedMedia[cacheKey] ? (
                         <div className="media-error-placeholder" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px', backgroundColor: 'rgba(239, 68, 68, 0.08)', borderRadius: '8px', color: '#ef4444', fontSize: '13px' }}>
                           <AlertTriangle size={16} />
                           <span>Audio unavailable</span>
                         </div>
-                      ) : (
+                      ) : (msg.decryptedMediaUrl || decryptedUrls[cacheKey]) ? (
                         <div className="media-wrapper">
                           <audio 
-                            src={msg.decryptedMediaUrl || getMediaUrl(msg.mediaUrl)} 
+                            src={msg.decryptedMediaUrl || decryptedUrls[cacheKey]} 
                             controls 
                             className="message-audio" 
-                            onError={() => setFailedMedia(prev => ({ ...prev, [msg.messageId || msg._id]: true }))}
+                            onError={() => setFailedMedia(prev => ({ ...prev, [cacheKey]: true }))}
                           />
+                        </div>
+                      ) : (
+                        <div className="media-loading-placeholder" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px', backgroundColor: 'rgba(0, 0, 0, 0.04)', borderRadius: '8px', color: '#64748b', fontSize: '13px' }}>
+                          <div className="loading-spinner-small" style={{ width: '14px', height: '14px', border: '2px solid #cbd5e1', borderTopColor: '#64748b', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+                          <span>Decrypting audio...</span>
                         </div>
                       )
                     )}
                     {msg.type === 'file' && msg.mediaUrl && (
-                      <div className="message-file-attachment">
-                        <FileText size={28} />
-                        <div className="file-info">
+                      (msg.decryptedMediaUrl || decryptedUrls[cacheKey]) ? (
+                        <div className="message-file-attachment">
+                          <FileText size={28} />
+                          <div className="file-info">
+                            <a 
+                              href={msg.decryptedMediaUrl || decryptedUrls[cacheKey]} 
+                              download={msg.mediaFilename} 
+                              target="_blank" 
+                              rel="noopener noreferrer" 
+                              className="file-link"
+                            >
+                              {msg.mediaFilename && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(msg.mediaFilename) ? "Document" : (msg.mediaFilename || "Document")}
+                            </a>
+                            <span className="file-size-tag">
+                              ({(msg.mediaSize / 1024 / 1024).toFixed(2)} MB)
+                            </span>
+                          </div>
                           <a 
-                            href={msg.decryptedMediaUrl || getMediaUrl(msg.mediaUrl)} 
-                            download={msg.mediaFilename} 
-                            target="_blank" 
-                            rel="noopener noreferrer" 
-                            className="file-link"
+                            href={msg.decryptedMediaUrl || decryptedUrls[cacheKey]} 
+                            download={msg.mediaFilename}
+                            className="file-download-btn"
                           >
-                            {msg.mediaFilename && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(msg.mediaFilename) ? "Document" : (msg.mediaFilename || "Document")}
+                            <Download size={18} />
                           </a>
-                          <span className="file-size-tag">
-                            ({(msg.mediaSize / 1024 / 1024).toFixed(2)} MB)
-                          </span>
                         </div>
-                        <a 
-                          href={msg.decryptedMediaUrl || getMediaUrl(msg.mediaUrl)} 
-                          download={msg.mediaFilename}
-                          className="file-download-btn"
-                        >
-                          <Download size={18} />
-                        </a>
-                      </div>
+                      ) : (
+                        <div className="media-loading-placeholder" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px', backgroundColor: 'rgba(0, 0, 0, 0.04)', borderRadius: '8px', color: '#64748b', fontSize: '13px' }}>
+                          <div className="loading-spinner-small" style={{ width: '14px', height: '14px', border: '2px solid #cbd5e1', borderTopColor: '#64748b', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+                          <span>Decrypting file...</span>
+                        </div>
+                      )
                     )}
                     {msg.content && (
                       <div className="text-content markdown-body">

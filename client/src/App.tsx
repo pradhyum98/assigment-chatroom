@@ -7,27 +7,39 @@ import ChatRoom from './features/chat/ChatRoom';
 import { CallProvider } from './features/calls/CallContext';
 import './index.css';
 import { subscribeToPushNotifications } from './services/pushNotifications';
-import { loginSuccess, logout, loginFailure } from './features/auth/authSlice';
+import { loginSuccess, logoutUser, updateUser, setStartupState } from './features/auth/authSlice';
 import api, { setAccessToken } from './services/api';
 import { syncEngine } from './services/SyncEngine';
+import { SecureKeyWrapper } from './services/secureKeyWrapper';
+import E2eeUnlockPage from './features/auth/E2eeUnlockPage';
+import { canonicalDb } from './services/CanonicalDatabase';
+import { secretStore } from './services/secretStore';
+
 
 const ProtectedRoute: React.FC<{ children: React.ReactElement }> = ({ children }) => {
-  const { isAuthenticated, loading } = useAppSelector((state) => state.auth);
+  const { isAuthenticated, startupState } = useAppSelector((state) => state.auth);
 
-  if (loading) {
+  if (startupState === 'RESTORING_SESSION' || startupState === 'RESTORING_E2EE_KEY' || startupState === 'HYDRATING_LOCAL_STATE' || startupState === 'RECOVERING') {
     return (
       <div className="flex-center full-screen bg-app">
-        <div className="loading-spinner">Validating session...</div>
+        <div className="loading-spinner">Validating session ({startupState})...</div>
       </div>
     );
   }
 
-  return isAuthenticated ? children : <Navigate to="/login" replace />;
+  if (isAuthenticated) {
+    if (startupState === 'E2EE_UNLOCK_REQUIRED') {
+      return <E2eeUnlockPage />;
+    }
+    return children;
+  }
+
+  return <Navigate to="/login" replace />;
 };
 
 const App: React.FC = () => {
   const dispatch = useAppDispatch();
-  const { token } = useAppSelector((state) => state.auth);
+  const { token, user, startupState } = useAppSelector((state) => state.auth);
   const currentRoom = useAppSelector((state) => state.rooms.currentRoom);
   const currentRoomRef = React.useRef(currentRoom);
 
@@ -79,50 +91,124 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // Keep a module-level promise to deduplicate concurrent bootstrap requests (e.g. from React StrictMode double mounts)
-  let bootstrapPromise: Promise<void> | null = null;
-
-  // Bootstrap session via silent refresh on initial mount
+  // Bootstrap session state machine
   useEffect(() => {
-    const bootstrapSession = async () => {
+    const bootstrap = async () => {
+      // 0. Transition from UNAUTHENTICATED on active credentials (login/signup)
+      if (startupState === 'UNAUTHENTICATED' && token && user) {
+        dispatch(setStartupState('RESTORING_E2EE_KEY'));
+        return;
+      }
+
       const hasSession = localStorage.getItem('hasSession') === 'true';
-      if (hasSession && !token) {
-        if (bootstrapPromise) {
-          return;
-        }
-        bootstrapPromise = (async () => {
+      
+      // 1. RESTORING_SESSION
+      if (startupState === 'RESTORING_SESSION') {
+        if (hasSession && !token) {
           try {
             console.log('[App] Attempting silent refresh bootstrap...');
             const response = await api.post('/auth/refresh');
-            const { token: newToken, user } = response.data.data;
+            const { token: newToken, user: freshUser } = response.data.data;
             setAccessToken(newToken);
-            dispatch(loginSuccess({ user, token: newToken }));
-          } catch (err) {
+            dispatch(loginSuccess({ user: freshUser, token: newToken }));
+            dispatch(setStartupState('RESTORING_E2EE_KEY'));
+          } catch (err: any) {
             console.error('[App] Bootstrap silent refresh failed:', err);
             setAccessToken(null);
-            dispatch(logout());
-          } finally {
-            bootstrapPromise = null;
+
+            const isNetworkError = !err.response || err.code === 'ERR_NETWORK' || err.message === 'Network Error';
+            const savedUser = JSON.parse(localStorage.getItem('user') || 'null');
+
+            if (isNetworkError && savedUser) {
+              console.log('[App] Offline connectivity detected. Restoring offline profile.');
+              dispatch(updateUser(savedUser));
+              dispatch(setStartupState('RESTORING_E2EE_KEY'));
+            } else {
+              // 401, 403, or invalid token/session: log out
+              console.warn('[App] Session invalid/revoked. Directing to unauthenticated.');
+              dispatch(logoutUser());
+              dispatch(setStartupState('UNAUTHENTICATED'));
+            }
           }
-        })();
-        await bootstrapPromise;
-      } else if (!hasSession) {
-        // Stop the loading spinner since we are not authenticated
-        dispatch(loginFailure(''));
+        } else if (token) {
+          dispatch(setStartupState('RESTORING_E2EE_KEY'));
+        } else {
+          dispatch(setStartupState('UNAUTHENTICATED'));
+        }
+      }
+
+      // 2. RESTORING_E2EE_KEY
+      if (startupState === 'RESTORING_E2EE_KEY') {
+        if (user && user._id) {
+          try {
+            console.log('[App] Restoring device-wrapped E2EE private key...');
+            const result = await SecureKeyWrapper.unwrapAndLoadPrivateKey(user._id, user.identityVersion || 1);
+            if (result === 'SUCCESS') {
+              dispatch(setStartupState('HYDRATING_LOCAL_STATE'));
+            } else if (result === 'NO_KEY') {
+              if (secretStore.getPrivateKey()) {
+                dispatch(setStartupState('HYDRATING_LOCAL_STATE'));
+              } else {
+                console.log('[App] Private key is missing from memory and device keystore. E2EE Unlock required.');
+                dispatch(setStartupState('E2EE_UNLOCK_REQUIRED'));
+              }
+            } else if (result === 'KEY_INVALIDATED' || result === 'ERROR') {
+              dispatch(setStartupState('E2EE_UNLOCK_REQUIRED'));
+            }
+          } catch (e) {
+            console.error('[App] E2EE key restoration crashed:', e);
+            dispatch(setStartupState('E2EE_UNLOCK_REQUIRED'));
+          }
+        } else {
+          dispatch(setStartupState('UNAUTHENTICATED'));
+        }
+      }
+
+      // 3. HYDRATING_LOCAL_STATE
+      if (startupState === 'HYDRATING_LOCAL_STATE') {
+        try {
+          console.log('[App] Hydrating local IndexedDB databases...');
+          await canonicalDb.open();
+          dispatch(setStartupState('RECOVERING'));
+        } catch (e) {
+          console.error('[App] Database hydration failed:', e);
+          dispatch(setStartupState('FATAL'));
+        }
+      }
+
+      // 4. RECOVERING
+      if (startupState === 'RECOVERING') {
+        if (user && user._id) {
+          try {
+            console.log('[App] Recovering sync engine stream and catch-up...');
+            await syncEngine.init(user._id);
+            if (navigator.onLine) {
+              dispatch(setStartupState('READY'));
+            } else {
+              dispatch(setStartupState('OFFLINE_READY'));
+            }
+          } catch (e) {
+            console.error('[App] SyncEngine recovery failed:', e);
+            if (navigator.onLine) {
+              dispatch(setStartupState('READY'));
+            } else {
+              dispatch(setStartupState('OFFLINE_READY'));
+            }
+          }
+        } else {
+          dispatch(setStartupState('UNAUTHENTICATED'));
+        }
       }
     };
 
-    bootstrapSession();
-  }, [dispatch, token]);
-
-  const user = useAppSelector((state) => state.auth.user);
+    bootstrap();
+  }, [startupState, token, user, dispatch]);
 
   useEffect(() => {
-    if (user && user._id) {
-      syncEngine.init(user._id);
+    if (startupState === 'READY' || startupState === 'OFFLINE_READY') {
+      subscribeToPushNotifications();
     }
-    subscribeToPushNotifications();
-  }, [user, token]);
+  }, [startupState]);
 
   return (
     <Router>

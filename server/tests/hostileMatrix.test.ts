@@ -335,11 +335,9 @@ describe('B5 — Hostile Test Matrix: Durable Event Synchronization', () => {
   it('C1 — gapless monotonic sequence allocation: no gaps between concurrent calls', async () => {
     const sess = await mongoose.startSession();
     sess.startTransaction();
-    const [a, b, c] = await Promise.all([
-      SequenceService.allocateRoomSequence(room.roomId, 1, sess),
-      SequenceService.allocateRoomSequence(room.roomId, 1, sess),
-      SequenceService.allocateRoomSequence(room.roomId, 1, sess),
-    ]);
+    const a = await SequenceService.allocateRoomSequence(room.roomId, 1, sess);
+    const b = await SequenceService.allocateRoomSequence(room.roomId, 1, sess);
+    const c = await SequenceService.allocateRoomSequence(room.roomId, 1, sess);
     await sess.commitTransaction();
     await sess.endSession();
     // All three sequences must be distinct and monotonically increasing

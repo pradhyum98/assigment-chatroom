@@ -98,6 +98,19 @@ describe('Axios Silent Refresh Interceptor', () => {
 
     expect(postSpy).toHaveBeenCalled();
     expect(getAccessToken()).toBeNull();
+
+    // Await async logout thunk completion
+    await new Promise<void>((resolve) => {
+      const check = () => {
+        if (store.getState().auth.token === null) {
+          resolve();
+        } else {
+          setTimeout(check, 10);
+        }
+      };
+      check();
+    });
+
     expect(store.getState().auth.token).toBeNull();
     expect(store.getState().auth.isAuthenticated).toBe(false);
   });

@@ -9,6 +9,9 @@ import { AppError } from '../middleware/errorHandler';
 import {  } from '../middleware/logger';
 import { AuthRequest } from '../types';
 import { auditLog } from '../utils/auditLogger';
+import { SequenceService } from '../services/SequenceService';
+import { UserEvent, UserEventType } from '../models/UserEvent';
+import { getIo } from '../socket';
 
 const createRoomSchema = z.object({
   roomName: z
@@ -124,9 +127,12 @@ export const createOrGetDM = async (
     const COLORS = ['#6366f1', '#ec4899', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
     const getRandomColor = () => COLORS[Math.floor(Math.random() * COLORS.length)];
 
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let userEvents: any[] = [];
     try {
       // Create a new DM room
-      room = await ChatRoom.create({
+      const [newRoom] = await ChatRoom.create([{
         roomId: uuidv4(),
         isDM: true,
         isPrivate: true,
@@ -135,10 +141,49 @@ export const createOrGetDM = async (
         createdBy: user._id,
         participants: participantIds,
         encryptedRoomKeys: normalizeEncryptedRoomKeys(req.body.encryptedRoomKeys || {}),
-      });
+      }], { session });
 
+      room = newRoom;
       auditLog.dmRoomCreated(room.roomId, user.email, participantIds);
+
+      for (const participantId of participantIds) {
+        const startUserSeq = await SequenceService.allocateUserSequence(participantId, 1, session);
+        userEvents.push(new UserEvent({
+          userId: participantId,
+          sequenceNumber: startUserSeq,
+          eventType: UserEventType.ROOM_ACCESS_GRANTED,
+          eventVersion: 1,
+          payload: {
+            roomId: room.roomId,
+            roomKeyVersion: room.roomKeyVersion || 1,
+            membershipRevision: room.membershipRevision || 1,
+            roomName: room.roomName,
+            isDM: room.isDM,
+            isPrivate: room.isPrivate,
+            avatarColor: room.avatarColor,
+            previewText: room.previewText,
+            participants: room.participants.map(p => p.toString()),
+            encryptedRoomKeys: room.encryptedRoomKeys ? Object.fromEntries(room.encryptedRoomKeys) : {},
+          }
+        }));
+      }
+
+      if (userEvents.length > 0) {
+        await UserEvent.insertMany(userEvents, { session });
+      }
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const io = getIo();
+      if (io) {
+        for (const ev of userEvents) {
+          io.to(ev.userId).emit('user_event', { events: [ev.toJSON()] });
+        }
+      }
     } catch (err: any) {
+      await session.abortTransaction();
+      session.endSession();
       // Catch concurrent creation index collision
       if (err.code === 11000) {
         room = await ChatRoom.findOne({

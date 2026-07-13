@@ -1,5 +1,5 @@
 import { io, Socket } from 'socket.io-client';
-import { getAccessToken } from './api';
+import api, { getAccessToken } from './api';
 
 import { TransportConfig } from '../config/TransportConfig';
 
@@ -40,8 +40,28 @@ class SocketService {
       console.log('[SocketService] Connected:', this.socket?.id);
     });
 
-    this.socket.on('connect_error', (err) => {
+    this.socket.on('connect_error', async (err) => {
       console.error('[SocketService] Connect error:', err.message);
+      if (err.message === 'Invalid token' || err.message === 'Authentication required' || err.message === 'Account not found') {
+        console.log('[SocketService] Token expired or invalid. Attempting silent refresh...');
+        try {
+          const response = await api.post('/auth/refresh');
+          const { token: newToken } = response.data.data;
+          if (newToken && this.socket) {
+            console.log('[SocketService] Silent refresh succeeded. Reconnecting socket with new token...');
+            (this.socket.auth as any).token = newToken;
+            this.socket.connect();
+          }
+        } catch (refreshErr) {
+          console.error('[SocketService] Silent refresh failed during socket reconnection:', refreshErr);
+          // Force logout if refresh fails
+          import('../store').then(({ store }) => {
+            import('../features/auth/authSlice').then(({ logoutUser }) => {
+              store.dispatch(logoutUser());
+            });
+          });
+        }
+      }
     });
 
     this.socket.on('disconnect', (reason) => {
@@ -65,8 +85,8 @@ class SocketService {
       import('./api').then(({ setAccessToken }) => setAccessToken(null));
       // 3. Dispatch Redux logout — triggers IDB wipe (B2) and auth state clear
       import('../store').then(({ store }) => {
-        import('../features/auth/authSlice').then(({ logout }) => {
-          store.dispatch(logout());
+        import('../features/auth/authSlice').then(({ logoutUser }) => {
+          store.dispatch(logoutUser());
         });
       });
     });

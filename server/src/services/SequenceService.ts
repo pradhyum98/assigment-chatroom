@@ -12,7 +12,7 @@ export class SequenceService {
   static async allocateRoomSequence(
     roomId: string,
     count: number,
-    session: ClientSession
+    session?: ClientSession
   ): Promise<number> {
     const result = await RoomSequence.findOneAndUpdate(
       { roomId },
@@ -41,7 +41,7 @@ export class SequenceService {
   static async allocateUserSequence(
     userId: string,
     count: number,
-    session: ClientSession
+    session?: ClientSession
   ): Promise<number> {
     const result = await UserSequence.findOneAndUpdate(
       { userId },

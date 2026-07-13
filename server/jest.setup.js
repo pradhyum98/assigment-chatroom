@@ -1,1 +1,2 @@
-jest.setTimeout(30000); // 30 seconds to allow MongoDB Atlas connections
+jest.setTimeout(120000); // 120 seconds to allow MongoDB Atlas connections
+

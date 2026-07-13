@@ -10,6 +10,7 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        registerPlugin(SecureKeyStorePlugin.class);
         super.onCreate(savedInstanceState);
     }
 

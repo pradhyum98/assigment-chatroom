@@ -5,6 +5,8 @@ import { loginStart, loginSuccess, loginFailure } from './authSlice';
 import api from '../../services/api';
 import { CryptoService } from '../../services/cryptoService';
 import { secretStore } from '../../services/secretStore';
+import { SecureKeyWrapper } from '../../services/secureKeyWrapper';
+import { getLocalAccountCleanupService } from '../../services/LocalAccountCleanupService';
 import './Auth.css';
 
 const LoginPage: React.FC = () => {
@@ -62,6 +64,10 @@ const LoginPage: React.FC = () => {
       const importedPrivKey = await CryptoService.importPrivateKey(privateKey);
       secretStore.setPrivateKey(importedPrivKey);
 
+      // Wrap and store key bound to device!
+      SecureKeyWrapper.incrementSession();
+      await SecureKeyWrapper.wrapAndStorePrivateKey(response.data.data.user._id, response.data.data.user.identityVersion || 1, importedPrivKey);
+
       dispatch(loginSuccess(response.data.data));
       navigate('/', { replace: true });
     } catch (err: any) {
@@ -84,6 +90,11 @@ const LoginPage: React.FC = () => {
       
       const importedPrivKey = await CryptoService.importPrivateKey(privateKey);
       
+      const userObj = response.data.data.user;
+
+      // Clear old native key
+      await SecureKeyWrapper.clearWrappedKey(userObj._id);
+
       // Clear in-memory secretStore
       secretStore.clearAll();
 
@@ -98,7 +109,17 @@ const LoginPage: React.FC = () => {
       }
       keysToRemove.forEach(k => localStorage.removeItem(k));
 
+      // Clear old IndexedDB staging & outbox data
+      const cleanupService = getLocalAccountCleanupService();
+      if (cleanupService) {
+        await cleanupService.purgeIdentityResetData(userObj._id);
+      }
+
       secretStore.setPrivateKey(importedPrivKey);
+
+      // Wrap new E2E private key bound to device!
+      SecureKeyWrapper.incrementSession();
+      await SecureKeyWrapper.wrapAndStorePrivateKey(userObj._id, userObj.identityVersion || 1, importedPrivKey);
 
       dispatch(loginSuccess(response.data.data));
       setShowIdentityReset(false);

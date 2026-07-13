@@ -9,6 +9,7 @@ import { OutboxService } from '../services/OutboxService';
 import { CryptoRevalidationService } from '../services/CryptoRevalidationService';
 import { syncEngine } from '../services/SyncEngine';
 import { store } from '../store';
+import { socketService } from '../services/socket';
 import {
   addOptimisticMutation,
   setOptimisticMutations,
@@ -113,6 +114,11 @@ describe('Outbox and Optimistic Overlay Reconciliation', () => {
     // Stub validation and re-encryption to succeed
     vi.spyOn(cryptoRevalidator, 'validate').mockResolvedValue({ isValid: true, needsReencryption: false });
 
+    // Stub socket sendMessage to immediately invoke handleAck with ok: true
+    const sendSpy = vi.spyOn(socketService, 'sendMessage').mockImplementation((data, callback) => {
+      callback?.({ ok: true, clientMsgId: data.clientMsgId });
+    });
+
     // Process item
     await (outboxService as any).processItem(item);
 
@@ -124,6 +130,8 @@ describe('Outbox and Optimistic Overlay Reconciliation', () => {
     const visible = selectVisibleMessages(store.getState(), ROOM, ACCOUNT);
     expect(visible).toHaveLength(1);
     expect(visible[0].content).toBe('ack test');
+
+    sendSpy.mockRestore();
   });
 
   // ── 3. Access revocation: quarantines outbox item and removes overlay ──

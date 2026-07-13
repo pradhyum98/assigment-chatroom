@@ -49,10 +49,14 @@ export const setRefreshTokenCookie = (req: Request, res: Response, token: string
   const origin = req.headers.origin;
   const isCapacitor = origin && (origin.startsWith('capacitor://') || origin.startsWith('https://localhost') || origin.startsWith('http://localhost'));
 
+  const isProduction = process.env.NODE_ENV === 'production';
+  const secure = isProduction;
+  const sameSite = isProduction ? 'none' : (isCapacitor ? 'lax' : 'strict');
+
   res.cookie('refreshToken', token, {
     httpOnly: true,
-    secure: isCapacitor ? false : (process.env.NODE_ENV === 'production'),
-    sameSite: isCapacitor ? 'lax' : 'strict',
+    secure,
+    sameSite,
     path: '/api/auth',
     maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days in ms
   });
@@ -62,10 +66,15 @@ export const clearRefreshTokenCookie = (req: Request, res: Response) => {
   const origin = req.headers.origin;
   const isCapacitor = origin && (origin.startsWith('capacitor://') || origin.startsWith('https://localhost') || origin.startsWith('http://localhost'));
 
+  const isProduction = process.env.NODE_ENV === 'production';
+  const secure = isProduction;
+  const sameSite = isProduction ? 'none' : (isCapacitor ? 'lax' : 'strict');
+
   res.clearCookie('refreshToken', {
     httpOnly: true,
-    secure: isCapacitor ? false : (process.env.NODE_ENV === 'production'),
-    sameSite: isCapacitor ? 'lax' : 'strict',
+    secure,
+    sameSite,
     path: '/api/auth'
   });
 };
+

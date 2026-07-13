@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { store } from '../store';
-import { logout, loginSuccess } from '../features/auth/authSlice';
+import { logoutUser, loginSuccess } from '../features/auth/authSlice';
 
 import { TransportConfig } from '../config/TransportConfig';
 
@@ -97,7 +97,7 @@ api.interceptors.response.use(
         
         // Clear tokens and log out the user
         setAccessToken(null);
-        store.dispatch(logout());
+        store.dispatch(logoutUser());
         return Promise.reject(refreshError);
       }
     }

@@ -138,6 +138,7 @@ async function executeAction(action, args) {
 
           case 'login': {
             const email = args[0];
+            const password = args[1] || '123456';
             if (!email) {
               console.error('Error: login action requires email parameter');
               break;
@@ -152,17 +153,16 @@ async function executeAction(action, args) {
                 }
 
                 if (!window.location.href.includes('/login')) {
-                  // Navigate to /login if needed
                   window.location.hash = '/login';
                   await new Promise(r => setTimeout(r, 1000));
                 }
 
-                const emailInput = document.querySelector('input[name="email"]');
-                const passInput = document.querySelector('input[name="password"]');
+                const emailInput = document.querySelector('input[type="email"]');
+                const passInput = document.querySelector('input[type="password"]');
 
                 if (emailInput && passInput) {
                   setReactInputValue(emailInput, '${email}');
-                  setReactInputValue(passInput, 'Password123!');
+                  setReactInputValue(passInput, '${password}');
 
                   const submitBtn = document.querySelector('button[type="submit"]');
                   if (submitBtn) {
@@ -285,6 +285,14 @@ async function executeAction(action, args) {
               })
             `);
             console.log('[WebView] Store Data:', result.value);
+            break;
+          }
+
+          case 'eval': {
+            const code = args.join(' ');
+            console.log(`[WebView] Evaluating: ${code}`);
+            result = await runCommand(ws, code);
+            console.log('[WebView] Result:', result.value);
             break;
           }
 

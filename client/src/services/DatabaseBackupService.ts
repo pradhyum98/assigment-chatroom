@@ -101,6 +101,8 @@ export class DatabaseBackupService {
       // All canonical_db v1 stores embed accountId on the record object.
       const isolated = allRecords.filter(r => {
         if (!r || typeof r !== 'object') return false;
+        // Exclude E2EE wrapped key metadata and native key aliases/references
+        if (storeName === 'sync_meta' && r.key === 'wrapped_e2e_key') return false;
         if (r.accountId !== undefined) return r.accountId === accountId;
         // Fallback: inspect first element of compound key path
         const kp = store.keyPath;

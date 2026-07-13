@@ -22,6 +22,10 @@ export class CanonicalDatabase {
         resolve(this.db);
         return;
       }
+      if (typeof indexedDB === 'undefined') {
+        reject(new Error('indexedDB is not defined'));
+        return;
+      }
       const request = indexedDB.open(DB_NAME, DB_VERSION);
       
       request.onupgradeneeded = (event) => {

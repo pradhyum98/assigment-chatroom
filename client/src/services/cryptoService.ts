@@ -173,11 +173,11 @@ export class CryptoService {
 
   // ── File Encryption (AES-GCM) ───────────────────────────────────────────────
   
-  static async encryptFile(file: File): Promise<{ encryptedBlob: Blob, fileKey: CryptoKey, ivBase64: string }> {
+  static async encryptFile(fileOrBuffer: File | ArrayBuffer): Promise<{ encryptedBlob: Blob, fileKey: CryptoKey, ivBase64: string }> {
     const fileKey = await this.generateRoomKey(); 
     const iv = window.crypto.getRandomValues(new Uint8Array(12));
     
-    const arrayBuffer = await file.arrayBuffer();
+    const arrayBuffer = fileOrBuffer instanceof ArrayBuffer ? fileOrBuffer : await fileOrBuffer.arrayBuffer();
     
     const ciphertextBuffer = await window.crypto.subtle.encrypt(
       { name: 'AES-GCM', iv },

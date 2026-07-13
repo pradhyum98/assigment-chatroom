@@ -19,6 +19,7 @@ import type { OptimisticMutation } from './optimisticTypes';
 import api from './api';
 
 import { DatabaseBackupService } from './DatabaseBackupService';
+import { projectionSubscriptionService } from './ProjectionSubscriptionService';
 
 class SyncEngine {
   public db = canonicalDb;
@@ -91,6 +92,7 @@ class SyncEngine {
 
     // 3. Trigger initial bootstrap recovery (IDB → Redux hydration happens inside)
     await this.recoveryCoordinator.triggerRecovery('app_startup');
+    await projectionSubscriptionService.hydrateFromCanonical(this.db);
 
     // 4. Hook up socket — SyncEngine is the sole consumer of durable events
     const socket = socketService.connect();

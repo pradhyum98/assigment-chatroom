@@ -1,4 +1,4 @@
-import { createSlice } from '@reduxjs/toolkit';
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import type { PayloadAction } from '@reduxjs/toolkit';
 import { setAccessToken } from '../../services/api';
 
@@ -8,7 +8,20 @@ interface User {
   lastName: string;
   email: string;
   publicKey?: string;
+  encryptedPrivateKey?: { ciphertext: string; iv: string };
+  identityVersion?: number;
 }
+
+export type StartupState =
+  | 'RESTORING_SESSION'
+  | 'RESTORING_E2EE_KEY'
+  | 'HYDRATING_LOCAL_STATE'
+  | 'RECOVERING'
+  | 'READY'
+  | 'OFFLINE_READY'
+  | 'E2EE_UNLOCK_REQUIRED'
+  | 'UNAUTHENTICATED'
+  | 'FATAL';
 
 interface AuthState {
   user: User | null;
@@ -16,6 +29,7 @@ interface AuthState {
   isAuthenticated: boolean;
   loading: boolean;
   error: string | null;
+  startupState: StartupState;
 }
 
 const initialState: AuthState = {
@@ -24,6 +38,7 @@ const initialState: AuthState = {
   isAuthenticated: localStorage.getItem('hasSession') === 'true',
   loading: localStorage.getItem('hasSession') === 'true', // Show loader on startup if session exists
   error: null,
+  startupState: localStorage.getItem('hasSession') === 'true' ? 'RESTORING_SESSION' : 'UNAUTHENTICATED',
 };
 
 const authSlice = createSlice({
@@ -98,8 +113,33 @@ const authSlice = createSlice({
     clearError: (state) => {
       state.error = null;
     },
+    setStartupState: (state, action: PayloadAction<StartupState>) => {
+      state.startupState = action.payload;
+    },
   },
 });
 
-export const { loginStart, loginSuccess, loginFailure, logout, updateUser, clearError } = authSlice.actions;
+export const { loginStart, loginSuccess, loginFailure, logout, updateUser, clearError, setStartupState } = authSlice.actions;
+
+export const logoutUser = createAsyncThunk<void, void>(
+  'auth/logoutUser',
+  async (_, { getState, dispatch }) => {
+    const state = getState() as any;
+    const accountId = state.auth.user?._id;
+    if (accountId) {
+      try {
+        console.log('[authSlice] Awaiting E2EE key and metadata cleanup...');
+        const { SecureKeyWrapper } = await import('../../services/secureKeyWrapper');
+        await SecureKeyWrapper.clearWrappedKey(accountId);
+        
+        const { syncEngine } = await import('../../services/SyncEngine');
+        await syncEngine.logout(accountId);
+      } catch (err) {
+        console.error('[authSlice] Logout cleanup failed:', err);
+      }
+    }
+    dispatch(logout());
+  }
+);
+
 export default authSlice.reducer;

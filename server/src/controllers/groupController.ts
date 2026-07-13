@@ -85,7 +85,16 @@ export const addMembers = async (req: AuthRequest, res: Response, next: NextFunc
           eventType: UserEventType.ROOM_ACCESS_GRANTED,
           eventVersion: 1,
           payload: {
-            roomId,
+            roomId: room.roomId,
+            roomKeyVersion: room.roomKeyVersion || 1,
+            membershipRevision: room.membershipRevision || 1,
+            roomName: room.roomName,
+            isDM: room.isDM,
+            isPrivate: room.isPrivate,
+            avatarColor: room.avatarColor,
+            previewText: room.previewText,
+            participants: room.participants.map(p => p.toString()),
+            encryptedRoomKeys: room.encryptedRoomKeys ? Object.fromEntries(room.encryptedRoomKeys) : {},
             addedBy: user._id.toString(),
             timestamp: new Date()
           }

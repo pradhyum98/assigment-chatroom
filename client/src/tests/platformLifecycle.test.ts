@@ -8,6 +8,7 @@ vi.mock('@capacitor/core', () => {
   let platform = 'web';
   let isNative = false;
   return {
+    registerPlugin: vi.fn(() => ({})),
     Capacitor: {
       getPlatform: () => platform,
       isNativePlatform: () => isNative,

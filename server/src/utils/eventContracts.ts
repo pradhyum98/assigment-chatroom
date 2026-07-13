@@ -105,7 +105,15 @@ export const RoomEventRegistry: Record<RoomEventType, z.ZodTypeAny> = {
 
 export const RoomAccessGrantedSchema = z.object({
   roomId: z.string(),
-  roomKeyVersion: z.number(),
+  roomKeyVersion: z.number().optional().default(1),
+  membershipRevision: z.number().optional().default(1),
+  roomName: z.string().optional(),
+  isDM: z.boolean().optional(),
+  isPrivate: z.boolean().optional(),
+  avatarColor: z.string().optional(),
+  previewText: z.string().optional(),
+  participants: z.array(z.string()).optional(),
+  encryptedRoomKeys: z.any().optional(),
 });
 
 export const RoomAccessRevokedSchema = z.object({

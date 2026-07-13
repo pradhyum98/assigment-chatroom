@@ -125,6 +125,12 @@ export class OutboxService {
     await this.updateStatus(item.mutationId, 'SENDING');
     
     try {
+      const accountId = this.db.getAccountId();
+      const room = await this.db.get<any>('room_projections', [accountId, item.roomId]);
+      const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+      const senderIdentityVersion = currentUser.identityVersion || 1;
+      const roomKeyVersion = room?.roomKeyVersion || 1;
+
       // Real network send via Socket.IO
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => reject(new Error('TIMEOUT')), 10000);
@@ -162,6 +168,8 @@ export class OutboxService {
               wrappedMediaKey: item.payload.wrappedMediaKey,
               mediaKeyIv: item.payload.mediaKeyIv,
               mediaIv: item.payload.mediaIv,
+              senderIdentityVersion,
+              roomKeyVersion,
             }, handleAck);
             break;
           case 'EDIT_MESSAGE':

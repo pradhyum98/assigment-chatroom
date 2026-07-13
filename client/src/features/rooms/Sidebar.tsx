@@ -3,7 +3,7 @@ import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { setCurrentRoom, addRoom } from './roomsSlice';
 import type { Room } from './roomsSlice';
 import { clearMessages } from '../chat/chatSlice';
-import { logout } from '../auth/authSlice';
+import { logoutUser } from '../auth/authSlice';
 import {
   setFriends,
   setPendingRequests,
@@ -196,7 +196,9 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
   // ─────────────────────────────────────────────────────────────────────────────
   const getRoomDisplayName = (room: Room) => {
     if (room.isDM) {
-      const other = room.participants?.find((p: any) => p._id !== user?._id);
+      const otherRaw = room.participants?.find((p: any) => (typeof p === 'string' ? p : p._id) !== user?._id);
+      const otherId = typeof otherRaw === 'string' ? otherRaw : otherRaw?._id;
+      const other = otherId ? (friends.find((f: any) => f._id === otherId) || (typeof otherRaw === 'object' ? otherRaw : null)) : null;
       return other ? `${other.firstName} ${other.lastName}` : 'Direct Message';
     }
     return room.roomName || 'Group Chat';
@@ -207,7 +209,9 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
   const isRoomOnline = (room: Room) => {
     if (room.isOnline !== undefined) return room.isOnline;
     if (room.isDM) {
-      const other = room.participants?.find((p: any) => p._id !== user?._id);
+      const otherRaw = room.participants?.find((p: any) => (typeof p === 'string' ? p : p._id) !== user?._id);
+      const otherId = typeof otherRaw === 'string' ? otherRaw : otherRaw?._id;
+      const other = otherId ? (friends.find((f: any) => f._id === otherId) || (typeof otherRaw === 'object' ? otherRaw : null)) : null;
       return other?.isOnline || false;
     }
     return false;
@@ -311,6 +315,10 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
       console.error('Failed to fetch friends data:', err);
     }
   }, [dispatch]);
+
+  useEffect(() => {
+    fetchFriendsData();
+  }, [fetchFriendsData]);
 
   useEffect(() => {
     if (activeTab === 'people') fetchFriendsData();
@@ -901,7 +909,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
           {/* Logout */}
           <button
             className="settings-menu-option"
-            onClick={() => dispatch(logout())}
+            onClick={() => dispatch(logoutUser())}
             style={{ borderColor: '#ef444430', marginTop: 8 }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
