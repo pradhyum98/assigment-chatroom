@@ -90,9 +90,15 @@ class SyncEngine {
     // was empty (IDB not yet bootstrapped). Now that the bug is fixed, retry them.
     await this._resetWronglyRejectedMutations(accountId);
 
-    // 3. Trigger initial bootstrap recovery (IDB → Redux hydration happens inside)
-    await this.recoveryCoordinator.triggerRecovery('app_startup');
+    // 3. Hydrate Redux state from local Canonical Database immediately (offline-first)
     await projectionSubscriptionService.hydrateFromCanonical(this.db);
+
+    // 4. Trigger initial bootstrap recovery (sync with server) and handle offline errors gracefully
+    try {
+      await this.recoveryCoordinator.triggerRecovery('app_startup');
+    } catch (err) {
+      console.warn('[SyncEngine] Initial bootstrap recovery failed (offline mode):', err);
+    }
 
     // 4. Hook up socket — SyncEngine is the sole consumer of durable events
     const socket = socketService.connect();
