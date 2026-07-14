@@ -102,8 +102,32 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
   });
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // E2EE decrypt helpers (preserved exactly)
+  // REST API fallback: if IDB/recovery didn't populate rooms (e.g. after fresh
+  // install / reinstall where app data is wiped), fetch directly from the server.
   // ─────────────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!user) return;
+    if (rooms.length > 0) return; // Already populated via IDB/recovery
+
+    const loadRoomsFromApi = async () => {
+      try {
+        const res = await api.get('/rooms');
+        const apiRooms: any[] = res.data.data?.rooms || res.data.rooms || [];
+        if (apiRooms.length > 0) {
+          const { setRooms: setRoomsAction } = await import('./roomsSlice');
+          dispatch(setRoomsAction(apiRooms));
+        }
+      } catch (e) {
+        console.warn('[Sidebar] REST API rooms fallback failed:', e);
+      }
+    };
+
+    // Give IDB/recovery 3 seconds to populate rooms before hitting REST API
+    const timer = setTimeout(loadRoomsFromApi, 3000);
+    return () => clearTimeout(timer);
+  }, [user, rooms.length, dispatch]);
+
+
   const getRoomKey = async (roomId: string, encryptedRoomKeys: any) => {
     try {
       const { secretStore } = await import('../../services/secretStore');

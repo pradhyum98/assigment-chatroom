@@ -395,6 +395,10 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
     const fetchMessages = async () => {
       if (!currentRoom) return;
       setIsLoading(true);
+      // Clear the decrypted-IDs cache whenever we load a new room so the socket
+      // useEffect starts fresh. We will re-populate it below with every message
+      // returned by this REST fetch so those are never double-decrypted.
+      decryptedTextIdsRef.current.clear();
       try {
         const response = await api.get(`/messages/${currentRoom.roomId}`);
         let fetchedMessages = response.data.data.messages;
@@ -461,6 +465,14 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
           }));
         }
 
+        // Mark every fetched message as already-decrypted so the socket
+        // real-time useEffect never tries to re-decrypt them (which would fail
+        // on plaintext and return '[Encrypted Message]').
+        fetchedMessages.forEach((m: any) => {
+          const id = m.messageId || m._id;
+          if (id) decryptedTextIdsRef.current.add(id);
+        });
+
         dispatch(setMessages(fetchedMessages));
         setHasMore(response.data.data.pagination.hasMore);
         
@@ -507,6 +519,12 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
                 return a.sequenceNumber - b.sequenceNumber;
               }
               return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+            });
+
+            // Mark local fallback messages as already-decrypted too
+            localRoomMsgs.forEach((m: any) => {
+              const id = m.messageId || m._id;
+              if (id) decryptedTextIdsRef.current.add(id);
             });
 
             dispatch(setMessages(localRoomMsgs));
