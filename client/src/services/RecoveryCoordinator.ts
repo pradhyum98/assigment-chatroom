@@ -181,10 +181,21 @@ export class RecoveryCoordinator {
     this.drainRoomBuffer(roomId);
   }
 
-  async handleIncomingRoomEvent(event: any): Promise<void> {
-    const success = this.socketBuffer.bufferRoomEvent(event);
-    if (success && this.currentState === 'READY') {
-      await this.drainRoomBuffer(event.roomId);
+  async handleIncomingRoomEvent(rawPayload: any): Promise<void> {
+    // Server emits two shapes:
+    //   1. RoomEventService: single envelope  { roomId, sequenceNumber, eventType, ... }
+    //   2. Other controllers: array wrapper   { events: [ envelope, ... ] }
+    // Normalize both into an array of envelopes.
+    const envelopes: any[] = Array.isArray(rawPayload?.events)
+      ? rawPayload.events
+      : [rawPayload];
+
+    for (const event of envelopes) {
+      if (!event?.roomId || event?.sequenceNumber == null) continue;
+      const success = this.socketBuffer.bufferRoomEvent(event);
+      if (success && this.currentState === 'READY') {
+        await this.drainRoomBuffer(event.roomId);
+      }
     }
   }
 
