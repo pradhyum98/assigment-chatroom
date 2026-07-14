@@ -84,6 +84,11 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
   const decryptedUrlsRef = useRef<Record<string, string>>({});
   const [isNetworkOnline, setIsNetworkOnline] = useState(navigator.onLine);
 
+  const messagesRef = useRef(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const scrollStateRef = useRef({ prevScrollHeight: 0, prevScrollTop: 0, adjustScroll: false });
   const lastRoomIdRef = useRef<string | null>(null);
@@ -392,112 +397,34 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
   };
 
   useEffect(() => {
+    let active = true;
     const fetchMessages = async () => {
       if (!currentRoom) return;
-      setIsLoading(true);
-      // Clear the decrypted-IDs cache whenever we load a new room so the socket
-      // useEffect starts fresh. We will re-populate it below with every message
-      // returned by this REST fetch so those are never double-decrypted.
+
+      // Reset cache for new room
       decryptedTextIdsRef.current.clear();
+
+      let hasLocalCached = false;
+      let localRoomMsgs: any[] = [];
+      let roomKey: any = null;
+
       try {
-        const response = await api.get(`/messages/${currentRoom.roomId}`);
-        let fetchedMessages = response.data.data.messages;
+        if (user?._id) {
+          const allLocalMsgs = await canonicalDb.getAll<any>(
+            'message_projections',
+            IDBKeyRange.bound([user._id, ''], [user._id, '\uffff'])
+          );
+          localRoomMsgs = allLocalMsgs.filter((m: any) => m.roomId === currentRoom.roomId);
 
-        // Decrypt messages if needed
-        const roomKey = await getRoomKey(currentRoom.roomId, currentRoom.encryptedRoomKeys);
-        if (roomKey) {
-          fetchedMessages = await Promise.all(fetchedMessages.map(async (msg: any) => {
-            let processedMsg = { ...msg };
-            
-            if (msg.iv && msg.content) {
-              try {
-                processedMsg.content = await decryptPayload(msg.content, msg.iv, roomKey);
-              } catch (e) {
-                console.error('Failed to decrypt message', msg.messageId, e);
-                processedMsg.content = '[Decryption Failed]';
+          if (localRoomMsgs.length > 0) {
+            localRoomMsgs.sort((a: any, b: any) => {
+              if (a.sequenceNumber !== undefined && b.sequenceNumber !== undefined) {
+                return a.sequenceNumber - b.sequenceNumber;
               }
-            }
-            
-            const hasMedia = msg.type !== 'text' && msg.mediaUrl && 
-              ((msg.encryptionVersion === 2 && msg.wrappedMediaKey && msg.mediaKeyIv && msg.mediaIv) || 
-               (msg.mediaKey && msg.mediaIv));
+              return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+            });
 
-            if (hasMedia) {
-              try {
-                const activeToken = getAccessToken();
-                const headers: Record<string, string> = {};
-                if (activeToken) {
-                  headers['Authorization'] = `Bearer ${activeToken}`;
-                }
-                const fileRes = await fetch(getMediaUrl(msg.mediaUrl), { headers });
-                const encryptedBlob = await fileRes.blob();
-                
-                let fileKey: any;
-                if (msg.encryptionVersion === 2) {
-                  fileKey = await CryptoService.unwrapMediaKey(
-                    msg.wrappedMediaKey,
-                    msg.mediaKeyIv,
-                    roomKey,
-                    {
-                      roomId: currentRoom.roomId,
-                      clientMsgId: msg.clientMsgId,
-                      encryptionVersion: 2
-                    }
-                  );
-                } else {
-                  fileKey = msg.mediaKey;
-                }
-
-                const objectUrl = await CryptoService.decryptFile(
-                  encryptedBlob,
-                  fileKey,
-                  msg.mediaIv || msg.mediaKeyIv,
-                  msg.mediaMimeType || 'application/octet-stream'
-                );
-                createdObjectUrlsRef.current.push(objectUrl);
-                processedMsg.decryptedMediaUrl = objectUrl;
-              } catch (e) {
-                console.error('Failed to decrypt media', msg.messageId, e);
-              }
-            }
-
-            return processedMsg;
-          }));
-        }
-
-        // Mark every fetched message as already-decrypted so the socket
-        // real-time useEffect never tries to re-decrypt them (which would fail
-        // on plaintext and return '[Encrypted Message]').
-        fetchedMessages.forEach((m: any) => {
-          const id = m.messageId || m._id;
-          if (id) decryptedTextIdsRef.current.add(id);
-        });
-
-        dispatch(setMessages(fetchedMessages));
-        setHasMore(response.data.data.pagination.hasMore);
-        
-        // Mark as read if there are messages
-        if (fetchedMessages.length > 0 && user) {
-          const unreadMessageIds = fetchedMessages
-            .filter((m: any) => m.senderId !== user._id && !m.readBy?.some((r: any) => r.userId === user._id))
-            .map((m: any) => m.messageId || m._id);
-            
-          if (unreadMessageIds.length > 0) {
-            socketService.markAsRead({ roomId: currentRoom.roomId, messageIds: unreadMessageIds });
-            dispatch(clearUnreadCount({ roomId: currentRoom.roomId, userId: user._id }));
-          }
-        }
-      } catch (err) {
-        console.error('Failed to fetch messages from server, falling back to local DB cache:', err);
-        try {
-          if (user?._id) {
-            const allLocalMsgs = await canonicalDb.getAll<any>(
-              'message_projections',
-              IDBKeyRange.bound([user._id, ''], [user._id, '\uffff'])
-            );
-            let localRoomMsgs = allLocalMsgs.filter((m: any) => m.roomId === currentRoom.roomId);
-
-            const roomKey = await getRoomKey(currentRoom.roomId, currentRoom.encryptedRoomKeys);
+            roomKey = await getRoomKey(currentRoom.roomId, currentRoom.encryptedRoomKeys);
             if (roomKey) {
               localRoomMsgs = await Promise.all(
                 localRoomMsgs.map(async (msg: any) => {
@@ -506,7 +433,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
                     try {
                       processedMsg.content = await decryptPayload(msg.content, msg.iv, roomKey);
                     } catch (e) {
-                      console.error('Failed to decrypt local offline message', msg.messageId, e);
+                      console.error('Failed to decrypt local offline message', msg.messageId || msg._id, e);
                     }
                   }
                   return processedMsg;
@@ -514,14 +441,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
               );
             }
 
-            localRoomMsgs.sort((a: any, b: any) => {
-              if (a.sequenceNumber !== undefined && b.sequenceNumber !== undefined) {
-                return a.sequenceNumber - b.sequenceNumber;
-              }
-              return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
-            });
+            if (!active) return;
 
-            // Mark local fallback messages as already-decrypted too
             localRoomMsgs.forEach((m: any) => {
               const id = m.messageId || m._id;
               if (id) decryptedTextIdsRef.current.add(id);
@@ -529,12 +450,154 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
 
             dispatch(setMessages(localRoomMsgs));
             setHasMore(false);
+            hasLocalCached = true;
+            setIsLoading(false);
           }
-        } catch (localErr) {
-          console.error('Failed to load offline messages from local DB:', localErr);
         }
+      } catch (localErr) {
+        console.error('Failed to load offline messages from local DB:', localErr);
+      }
+
+      if (!hasLocalCached) {
+        if (!active) return;
+        setIsLoading(true);
+      }
+
+      try {
+        const response = await api.get(`/messages/${currentRoom.roomId}`);
+        if (!active) return;
+
+        let fetchedMessages = response.data.data.messages;
+
+        if (!roomKey) {
+          roomKey = await getRoomKey(currentRoom.roomId, currentRoom.encryptedRoomKeys);
+        }
+
+        if (roomKey) {
+          fetchedMessages = await Promise.all(
+            fetchedMessages.map(async (msg: any) => {
+              let processedMsg = { ...msg };
+              const msgId = msg.messageId || msg._id;
+              const alreadyDecrypted = msgId && decryptedTextIdsRef.current.has(msgId);
+              if (msg.iv && msg.content && !alreadyDecrypted) {
+                try {
+                  processedMsg.content = await decryptPayload(msg.content, msg.iv, roomKey);
+                } catch (e) {
+                  console.error('Failed to decrypt message', msg.messageId || msg._id, e);
+                  processedMsg.content = '[Decryption Failed]';
+                }
+              }
+
+              const hasMedia = msg.type !== 'text' && msg.mediaUrl &&
+                ((msg.encryptionVersion === 2 && msg.wrappedMediaKey && msg.mediaKeyIv && msg.mediaIv) ||
+                 (msg.mediaKey && msg.mediaIv));
+
+              if (hasMedia) {
+                try {
+                  const activeToken = getAccessToken();
+                  const headers: Record<string, string> = {};
+                  if (activeToken) {
+                    headers['Authorization'] = `Bearer ${activeToken}`;
+                  }
+                  const fileRes = await fetch(getMediaUrl(msg.mediaUrl), { headers });
+                  const encryptedBlob = await fileRes.blob();
+
+                  let fileKey: any;
+                  if (msg.encryptionVersion === 2) {
+                    fileKey = await CryptoService.unwrapMediaKey(
+                      msg.wrappedMediaKey,
+                      msg.mediaKeyIv,
+                      roomKey,
+                      {
+                        roomId: currentRoom.roomId,
+                        clientMsgId: msg.clientMsgId,
+                        encryptionVersion: 2
+                      }
+                    );
+                  } else {
+                    fileKey = msg.mediaKey;
+                  }
+
+                  const objectUrl = await CryptoService.decryptFile(
+                    encryptedBlob,
+                    fileKey,
+                    msg.mediaIv || msg.mediaKeyIv,
+                    msg.mediaMimeType || 'application/octet-stream'
+                  );
+                  createdObjectUrlsRef.current.push(objectUrl);
+                  processedMsg.decryptedMediaUrl = objectUrl;
+                } catch (e) {
+                  console.error('Failed to decrypt media', msg.messageId || msg._id, e);
+                }
+              }
+
+              return processedMsg;
+            })
+          );
+        }
+
+        if (!active) return;
+
+        const mergedMap = new Map<string, any>();
+
+        messagesRef.current.forEach((m: any) => {
+          const id = m.messageId || m._id;
+          if (id) mergedMap.set(id, m);
+        });
+
+        fetchedMessages.forEach((m: any) => {
+          const id = m.messageId || m._id;
+          if (!id) return;
+          const existing = mergedMap.get(id);
+          if (existing) {
+            const merged = { ...existing, ...m };
+            const existingIdStr = existing.messageId || existing._id;
+            if (existingIdStr && decryptedTextIdsRef.current.has(existingIdStr)) {
+              merged.content = existing.content;
+            }
+            if (existing.decryptedMediaUrl) {
+              merged.decryptedMediaUrl = existing.decryptedMediaUrl;
+            }
+            mergedMap.set(id, merged);
+          } else {
+            mergedMap.set(id, m);
+          }
+        });
+
+        const reconciledMessages = Array.from(mergedMap.values());
+        reconciledMessages.sort((a: any, b: any) => {
+          if (a.sequenceNumber !== undefined && b.sequenceNumber !== undefined) {
+            return a.sequenceNumber - b.sequenceNumber;
+          }
+          return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+        });
+
+        reconciledMessages.forEach((m: any) => {
+          const id = m.messageId || m._id;
+          if (id && m.content && (!m.iv || m.content !== '[Encrypted Message]')) {
+            decryptedTextIdsRef.current.add(id);
+          }
+        });
+
+        dispatch(setMessages(reconciledMessages));
+        setHasMore(response.data.data.pagination.hasMore);
+
+        if (reconciledMessages.length > 0 && user) {
+          const unreadMessageIds = reconciledMessages
+            .filter((m: any) => m.senderId !== user._id && !m.readBy?.some((r: any) => r.userId === user._id))
+            .map((m: any) => m.messageId || m._id);
+
+          if (unreadMessageIds.length > 0) {
+            socketService.markAsRead({ roomId: currentRoom.roomId, messageIds: unreadMessageIds });
+            dispatch(clearUnreadCount({ roomId: currentRoom.roomId, userId: user._id }));
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch messages from server, falling back to local DB cache:', err);
       } finally {
-         setIsLoading(false);
+        if (active) {
+          setIsLoading(false);
+        }
       }
     };
 
@@ -542,6 +605,10 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
     dispatch(clearTyping());
     setEditingMessageId(null);
     setReplyingTo(null);
+
+    return () => {
+      active = false;
+    };
   }, [currentRoom?.roomId, dispatch, user]);
 
   useEffect(() => {
