@@ -28,6 +28,8 @@ export class RecoveryCoordinator {
   private socketBuffer: SocketBuffer;
   private snapshotInstaller: SnapshotInstaller;
   private cleanupService: CleanupService;
+  // Tracks rooms currently undergoing a targeted recovery to prevent duplicate concurrent recoveries
+  private roomRecoveryInProgress = new Set<string>();
 
   private db: CanonicalDatabase;
   private reconciler: CanonicalReconciler;
@@ -191,9 +193,42 @@ export class RecoveryCoordinator {
       : [rawPayload];
 
     for (const event of envelopes) {
-      if (!event?.roomId || event?.sequenceNumber == null) continue;
+      if (!event?.roomId || event?.sequenceNumber == null) {
+        continue;
+      }
+
       const success = this.socketBuffer.bufferRoomEvent(event);
-      if (success && this.currentState === 'READY') {
+      if (!success || this.currentState !== 'READY') continue;
+
+      const accountId = this.db.getAccountId();
+      const cursor = await this.db.get<any>('room_cursors', [accountId, event.roomId]);
+      const lastSeq = cursor?.lastContiguousSequence || 0;
+
+      if (event.sequenceNumber > lastSeq + 1) {
+        // GAP DETECTED: room_cursors is behind the incoming event.
+        // This happens when fetchMessages() loaded messages via REST (updating Redux) but
+        // never advanced the IDB cursor. The drain loop expects seq lastSeq+1 and silently
+        // drops anything higher. Fix: run a targeted single-room recovery to sync IDB up,
+        // then drain will find the buffered event as contiguous and apply it.
+        if (!this.roomRecoveryInProgress.has(event.roomId)) {
+          console.log(
+            `[RecoveryCoordinator] Gap detected room=${event.roomId} cursorSeq=${lastSeq} eventSeq=${event.sequenceNumber}. Triggering targeted recovery.`
+          );
+          this.roomRecoveryInProgress.add(event.roomId);
+          try {
+            await this.recoverSingleRoomStream(this.currentGenerationId, event.roomId);
+          } catch (e: any) {
+            // If the generation changed mid-recovery that's fine; new event stays in buffer
+            // and will be drained by the next full recovery cycle.
+            console.warn('[RecoveryCoordinator] Targeted room recovery failed:', e?.message);
+          } finally {
+            this.roomRecoveryInProgress.delete(event.roomId);
+          }
+        }
+        // If recovery is already in progress, the event is buffered and will be
+        // drained by that in-flight recoverSingleRoomStream at its end.
+      } else {
+        // No gap — drain the buffer immediately.
         await this.drainRoomBuffer(event.roomId);
       }
     }

@@ -105,7 +105,10 @@ export class CanonicalReconciler {
         }
       };
       
-      checkReq.onerror = () => reject(checkReq.error);
+      checkReq.onerror = () => {
+        console.error('[CanonicalReconciler] checkReq error:', checkReq.error);
+        reject(checkReq.error);
+      };
       tx.oncomplete = () => {
         // Dispatch canonical changes to Redux AFTER commit
         const syncChanges = changes.filter(c => c.type !== 'OPTIMISTIC_RESOLVED');
@@ -115,10 +118,15 @@ export class CanonicalReconciler {
         // Remove optimistic overlay for any resolved mutations
         changes
           .filter(c => c.type === 'OPTIMISTIC_RESOLVED')
-          .forEach(c => store.dispatch(removeOptimisticMutation(c.payload.clientMsgId)));
+          .forEach(c => {
+            store.dispatch(removeOptimisticMutation(c.payload.clientMsgId));
+          });
         resolve();
       };
-      tx.onerror = () => reject(tx.error);
+      tx.onerror = () => {
+        console.error('[CanonicalReconciler] Transaction aborted/failed for event:', event.eventType, 'seq:', event.sequenceNumber, tx.error);
+        reject(tx.error);
+      };
     });
   }
 
