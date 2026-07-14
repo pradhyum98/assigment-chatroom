@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
-import { setMessages, clearTyping, selectVisibleMessages } from './chatSlice';
+import { setMessages, clearTyping, selectVisibleMessages, setDecryptedMessageContent } from './chatSlice';
 import { clearUnreadCount, setCurrentRoom } from '../rooms/roomsSlice';
 import api, { getAccessToken } from '../../services/api';
 import { TransportConfig } from '../../config/TransportConfig';
@@ -88,6 +88,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
   const scrollStateRef = useRef({ prevScrollHeight: 0, prevScrollTop: 0, adjustScroll: false });
   const lastRoomIdRef = useRef<string | null>(null);
   const createdObjectUrlsRef = useRef<string[]>([]);
+  const decryptedTextIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const handleOnline = () => setIsNetworkOnline(true);
@@ -167,6 +168,44 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
 
     decryptNewMedia();
   }, [messages, currentRoom, failedMedia, isNetworkOnline]);
+
+  // Decrypt incoming real-time text messages as they arrive via socket & Redux
+  useEffect(() => {
+    if (!currentRoom) return;
+
+    // Reset decrypted cache if room changes
+    if (lastRoomIdRef.current !== currentRoom.roomId) {
+      decryptedTextIdsRef.current.clear();
+      lastRoomIdRef.current = currentRoom.roomId;
+    }
+
+    if (!visibleMessages.length) return;
+
+    const decryptPendingMessages = async () => {
+      const roomKey = await getRoomKey(currentRoom.roomId, currentRoom.encryptedRoomKeys);
+      if (!roomKey) return;
+
+      for (const msg of visibleMessages as any[]) {
+        const msgId = msg.messageId || msg._id;
+        if (!msgId) continue;
+
+        const isEncryptedText = msg.iv && msg.content && (!msg.type || msg.type === 'text');
+        const needsDecryption = isEncryptedText && !decryptedTextIdsRef.current.has(msgId);
+
+        if (needsDecryption) {
+          decryptedTextIdsRef.current.add(msgId);
+          try {
+            const decryptedContent = await decryptPayload(msg.content, msg.iv, roomKey);
+            dispatch(setDecryptedMessageContent({ messageId: msgId, content: decryptedContent }));
+          } catch (e) {
+            console.error('Failed to decrypt incoming real-time message text:', msgId, e);
+          }
+        }
+      }
+    };
+
+    decryptPendingMessages();
+  }, [visibleMessages, currentRoom, dispatch]);
 
   useEffect(() => {
     const handleOutsideClick = () => {

@@ -181,14 +181,56 @@ export class RecoveryCoordinator {
     this.drainRoomBuffer(roomId);
   }
 
-  private drainUserBuffer() {
-    // const _cursorReq = Promise.resolve(); // we should read the cursor synchronously in a real loop
-    // Omitted boilerplate. In reality, we read `lastContiguousSequence`, pull from `socketBuffer.getContiguousUserEvents`, 
-    // apply them, and repeat until the buffer returns no contiguous events.
+  async handleIncomingRoomEvent(event: any): Promise<void> {
+    const success = this.socketBuffer.bufferRoomEvent(event);
+    if (success && this.currentState === 'READY') {
+      await this.drainRoomBuffer(event.roomId);
+    }
   }
 
-  private drainRoomBuffer(_roomId: string) {
-    // Same as above
+  async handleIncomingUserEvent(event: any): Promise<void> {
+    const success = this.socketBuffer.bufferUserEvent(event);
+    if (success && this.currentState === 'READY') {
+      await this.drainUserBuffer();
+    }
+  }
+
+  private async drainUserBuffer(): Promise<void> {
+    const accountId = this.db.getAccountId();
+    let hasMore = true;
+    while (hasMore) {
+      const cursorReq = await this.db.get<any>('user_cursor', accountId);
+      const lastSeq = cursorReq?.lastContiguousSequence || 0;
+      const events = this.socketBuffer.getContiguousUserEvents(lastSeq);
+      if (events.length === 0) {
+        hasMore = false;
+        break;
+      }
+      for (const event of events) {
+        await this.reconciler.applyUserEvent(event);
+      }
+      const maxSeq = events[events.length - 1].sequenceNumber;
+      this.socketBuffer.removeUserEvents(maxSeq);
+    }
+  }
+
+  private async drainRoomBuffer(roomId: string): Promise<void> {
+    const accountId = this.db.getAccountId();
+    let hasMore = true;
+    while (hasMore) {
+      const cursor = await this.db.get<any>('room_cursors', [accountId, roomId]);
+      const lastSeq = cursor?.lastContiguousSequence || 0;
+      const events = this.socketBuffer.getContiguousRoomEvents(roomId, lastSeq);
+      if (events.length === 0) {
+        hasMore = false;
+        break;
+      }
+      for (const event of events) {
+        await this.reconciler.applyRoomEvent(event);
+      }
+      const maxSeq = events[events.length - 1].sequenceNumber;
+      this.socketBuffer.removeRoomEvents(roomId, maxSeq);
+    }
   }
 
   private handleBufferOverflow(streamType: 'room' | 'user', streamId: string) {

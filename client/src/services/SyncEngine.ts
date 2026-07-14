@@ -104,10 +104,10 @@ class SyncEngine {
     const socket = socketService.connect();
     if (socket) {
       socket.on('room_event', (event: unknown) => {
-        this.recoveryCoordinator.buffer.bufferRoomEvent(event as any);
+        this.recoveryCoordinator.handleIncomingRoomEvent(event as any);
       });
       socket.on('user_event', (event: unknown) => {
-        this.recoveryCoordinator.buffer.bufferUserEvent(event as any);
+        this.recoveryCoordinator.handleIncomingUserEvent(event as any);
       });
       socket.on('connect', () => {
         this.recoveryCoordinator.triggerRecovery('socket_connect');

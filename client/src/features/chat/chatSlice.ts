@@ -99,6 +99,12 @@ const chatSlice = createSlice({
     clearMessages: (state) => {
       state.messages = [];
     },
+    setDecryptedMessageContent: (state, action: PayloadAction<{ messageId: string; content: string }>) => {
+      const msg = state.messages.find(m => m.messageId === action.payload.messageId);
+      if (msg) {
+        msg.content = action.payload.content;
+      }
+    },
     updateMessage: (state, action: PayloadAction<{ messageId: string; _id?: string; content: string; editedAt: string }>) => {
       const msg = state.messages.find(m => m.messageId === action.payload.messageId);
       if (msg) {
@@ -199,6 +205,7 @@ const chatSlice = createSlice({
 
 export const {
   setMessages, addMessage, setLoading, setError, clearMessages,
+  setDecryptedMessageContent,
   updateMessage, deleteMessage, updateMessageReactions, updateMessageReceipts,
   setTyping, clearTyping,
   setOptimisticMutations, addOptimisticMutation, removeOptimisticMutation, updateOptimisticMutationStatus,
