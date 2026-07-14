@@ -51,8 +51,8 @@ function getWebSocketUrl() {
   });
 }
 
-function runCommand(ws, expression) {
-  return new Promise((resolve) => {
+function runCommand(ws, expression, timeoutMs = 15000) {
+  return new Promise((resolve, reject) => {
     const id = Math.floor(Math.random() * 1000000);
     const payload = JSON.stringify({
       id,
@@ -64,12 +64,20 @@ function runCommand(ws, expression) {
       }
     });
 
+    const timer = setTimeout(() => {
+      ws.off('message', handler);
+      reject(new Error(`Runtime.evaluate timed out after ${timeoutMs}ms for expression: ${expression.slice(0, 80)}`));
+    }, timeoutMs);
+
     const handler = (data) => {
-      const response = JSON.parse(data.toString());
-      if (response.id === id) {
-        ws.off('message', handler);
-        resolve(response.result ? response.result.result : null);
-      }
+      try {
+        const response = JSON.parse(data.toString());
+        if (response.id === id) {
+          clearTimeout(timer);
+          ws.off('message', handler);
+          resolve(response.result ? response.result.result : null);
+        }
+      } catch (e) { /* ignore non-matching messages */ }
     };
 
     ws.on('message', handler);
@@ -87,6 +95,23 @@ async function executeAction(action, args) {
     ws.on('open', async () => {
       console.log('[DevTools] Debugger session attached.');
       try {
+        // Enable the Runtime domain — required on Android WebViews before Runtime.evaluate responds
+        await new Promise((res) => {
+          const enableId = Math.floor(Math.random() * 1000000);
+          const timer = setTimeout(res, 3000); // proceed even if no ack
+          const handler = (data) => {
+            try {
+              const msg = JSON.parse(data.toString());
+              if (msg.id === enableId) {
+                clearTimeout(timer);
+                ws.off('message', handler);
+                res();
+              }
+            } catch (e) {}
+          };
+          ws.on('message', handler);
+          ws.send(JSON.stringify({ id: enableId, method: 'Runtime.enable' }));
+        });
         let result;
         switch (action) {
           case 'url':
@@ -292,7 +317,39 @@ async function executeAction(action, args) {
             const code = args.join(' ');
             console.log(`[WebView] Evaluating: ${code}`);
             result = await runCommand(ws, code);
-            console.log('[WebView] Result:', result.value);
+            console.log('[WebView] Result:', result ? result.value : null);
+            break;
+          }
+
+          case 'accept-all-requests': {
+            result = await runCommand(ws, `
+              (() => {
+                const btns = Array.from(document.querySelectorAll('button')).filter(b => b.innerText.trim() === 'Accept');
+                btns.forEach(b => b.click());
+                return 'Clicked ' + btns.length + ' accept buttons';
+              })()
+            `);
+            console.log('[WebView] Accept requests:', result ? result.value : null);
+            break;
+          }
+
+          case 'send-message': {
+            const msg = args.join(' ') || 'Hello from harness';
+            result = await runCommand(ws, `
+              (async () => {
+                const inp = document.querySelector('textarea, input[placeholder*="message"], input[placeholder*="Message"]');
+                if (!inp) return 'Message input not found';
+                const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype, 'value').set;
+                setter.call(inp, '${msg.replace(/'/g, "\\'").replace(/"/g, '\\"')}');
+                inp.dispatchEvent(new Event('input', { bubbles: true }));
+                await new Promise(r => setTimeout(r, 300));
+                const sendBtn = document.querySelector('button[type="submit"], button[aria-label*="Send"], button[title*="Send"]');
+                if (sendBtn) { sendBtn.click(); return 'Message sent: ${msg.slice(0,40)}'; }
+                inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+                return 'Pressed Enter to send';
+              })()
+            `);
+            console.log('[WebView] Send Message:', result ? result.value : null);
             break;
           }
 

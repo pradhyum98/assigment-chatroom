@@ -16,6 +16,7 @@ import { useCrypto } from '../../hooks/useCrypto';
 import { CryptoService } from '../../services/cryptoService';
 import { ImageViewer } from './ImageViewer';
 import { syncEngine } from '../../services/SyncEngine';
+import { canonicalDb } from '../../services/CanonicalDatabase';
 import './Chat.css';
 
 const getMediaUrl = (urlPath: string) => {
@@ -436,7 +437,45 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
           }
         }
       } catch (err) {
-        console.error('Failed to fetch messages', err);
+        console.error('Failed to fetch messages from server, falling back to local DB cache:', err);
+        try {
+          if (user?._id) {
+            const allLocalMsgs = await canonicalDb.getAll<any>(
+              'message_projections',
+              IDBKeyRange.bound([user._id, ''], [user._id, '\uffff'])
+            );
+            let localRoomMsgs = allLocalMsgs.filter((m: any) => m.roomId === currentRoom.roomId);
+
+            const roomKey = await getRoomKey(currentRoom.roomId, currentRoom.encryptedRoomKeys);
+            if (roomKey) {
+              localRoomMsgs = await Promise.all(
+                localRoomMsgs.map(async (msg: any) => {
+                  let processedMsg = { ...msg };
+                  if (msg.iv && msg.content) {
+                    try {
+                      processedMsg.content = await decryptPayload(msg.content, msg.iv, roomKey);
+                    } catch (e) {
+                      console.error('Failed to decrypt local offline message', msg.messageId, e);
+                    }
+                  }
+                  return processedMsg;
+                })
+              );
+            }
+
+            localRoomMsgs.sort((a: any, b: any) => {
+              if (a.sequenceNumber !== undefined && b.sequenceNumber !== undefined) {
+                return a.sequenceNumber - b.sequenceNumber;
+              }
+              return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+            });
+
+            dispatch(setMessages(localRoomMsgs));
+            setHasMore(false);
+          }
+        } catch (localErr) {
+          console.error('Failed to load offline messages from local DB:', localErr);
+        }
       } finally {
          setIsLoading(false);
       }
