@@ -14,6 +14,7 @@ import { SecureKeyWrapper } from './services/secureKeyWrapper';
 import E2eeUnlockPage from './features/auth/E2eeUnlockPage';
 import { canonicalDb } from './services/CanonicalDatabase';
 import { secretStore } from './services/secretStore';
+import { AppLockOverlay } from './features/auth/AppLockOverlay';
 
 
 const ProtectedRoute: React.FC<{ children: React.ReactElement }> = ({ children }) => {
@@ -212,6 +213,7 @@ const App: React.FC = () => {
 
   return (
     <Router>
+      <AppLockOverlay />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<SignupPage />} />

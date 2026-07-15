@@ -1,0 +1,192 @@
+/* ── App Lock Screen Overlay ───────────────────────────────────────────────
+   Always displayed as a full-screen overlay regardless of app theme.
+   Uses the app's CSS design tokens with correct variable names.
+──────────────────────────────────────────────────────────────────────────── */
+
+.app-lock-screen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: var(--bg-app, #E2E8F0);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 99999;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  color: var(--text-main, #1B1B1B);
+}
+
+.app-lock-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  max-width: 360px;
+  padding: 24px;
+}
+
+.app-lock-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 32px;
+  text-align: center;
+}
+
+.lock-icon-glow {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: var(--primary-low-opaque, rgba(79, 70, 229, 0.05));
+  border: 1px solid var(--primary, #4F46E5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-bottom: 16px;
+  box-shadow: 0 0 15px var(--primary-low-opaque, rgba(79, 70, 229, 0.2));
+}
+
+.app-lock-header h2 {
+  font-size: 24px;
+  font-weight: 700;
+  margin: 0 0 8px;
+  color: var(--text-main, #1B1B1B);
+}
+
+.hint-text {
+  font-size: 14px;
+  color: var(--text-muted, #94A3B8);
+}
+
+.error-text {
+  font-size: 14px;
+  color: #ef4444;
+  font-weight: 500;
+  animation: shake 0.4s ease;
+}
+
+/* ── PIN Lock Styles ── */
+.pin-dots {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 40px;
+  justify-content: center;
+  align-items: center;
+  height: 16px;
+}
+
+.pin-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--text-muted, #94A3B8);
+  transition: all 0.15s ease;
+}
+
+.pin-dot.filled {
+  background-color: var(--primary, #4F46E5);
+  border-color: var(--primary, #4F46E5);
+  transform: scale(1.2);
+}
+
+.pin-dot.error {
+  border-color: #ef4444;
+  background-color: #ef4444;
+}
+
+.numpad-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px 24px;
+  width: 100%;
+}
+
+.numpad-btn {
+  height: 64px;
+  width: 64px;
+  border-radius: 50%;
+  border: 1px solid var(--border-color, #E2E8F0);
+  background-color: var(--bg-sidebar, #FFFFFF);
+  color: var(--text-main, #1B1B1B);
+  font-size: 22px;
+  font-weight: 600;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+  outline: none;
+  justify-self: center;
+  transition: all 0.15s ease;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+.numpad-btn:active {
+  background-color: var(--primary-low-opaque, rgba(79, 70, 229, 0.1));
+  border-color: var(--primary, #4F46E5);
+  transform: scale(0.95);
+}
+
+.numpad-btn.control {
+  border: none;
+  background-color: transparent;
+  font-size: 16px;
+  color: var(--text-muted, #94A3B8);
+}
+
+.numpad-btn.control:active {
+  background-color: transparent;
+  color: var(--primary, #4F46E5);
+}
+
+.numpad-placeholder {
+  width: 64px;
+  height: 64px;
+}
+
+/* ── Pattern Lock Styles ── */
+.pattern-lock-layout {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
+.pattern-canvas {
+  width: 280px;
+  height: 280px;
+  border: 1px solid var(--border-color, #E2E8F0);
+  border-radius: 12px;
+  background: var(--bg-input, #F1F5F9);
+  cursor: pointer;
+  margin-bottom: 24px;
+}
+
+.biometrics-fab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 20px;
+  border-radius: 24px;
+  border: 1px solid var(--primary, #4F46E5);
+  background: var(--primary-low-opaque, rgba(79, 70, 229, 0.05));
+  color: var(--primary, #4F46E5);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+.biometrics-fab:active {
+  background: var(--primary, #4F46E5);
+  color: white;
+  transform: scale(0.97);
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-6px); }
+  75% { transform: translateX(6px); }
+}

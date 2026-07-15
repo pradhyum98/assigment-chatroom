@@ -4,6 +4,7 @@ import { setCurrentRoom, addRoom } from './roomsSlice';
 import type { Room } from './roomsSlice';
 import { clearMessages } from '../chat/chatSlice';
 import { logoutUser } from '../auth/authSlice';
+import { AppLockSettings } from '../settings/AppLockSettings';
 import {
   setFriends,
   setPendingRequests,
@@ -875,6 +876,10 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
       );
     }
 
+    if (settingsPanel === 'privacy') {
+      return <AppLockSettings onBack={() => setSettingsPanel(null)} />;
+    }
+
     // Default settings menu
     return (
       <div className="room-list-scroll-wrapper" style={{ flex: 1, overflowY: 'auto' }}>
@@ -914,7 +919,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
             <ChevronRight size={18} color="var(--text-muted)" />
           </button>
 
-          <button className="settings-menu-option" onClick={() => alert("Privacy & Security screen is unimplemented.")}>
+          <button className="settings-menu-option" onClick={() => setSettingsPanel('privacy')}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <Shield size={18} color="var(--primary)" />
               <span className="settings-option-label">Privacy &amp; Security</span>
