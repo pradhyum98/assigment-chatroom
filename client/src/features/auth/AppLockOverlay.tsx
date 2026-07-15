@@ -15,17 +15,6 @@ export const AppLockOverlay: React.FC = () => {
     return false;
   });
 
-  // Re-check on every render cycle in case isEnabled changed externally
-  useEffect(() => {
-    if (AppLockService.isEnabled() && !isLocked) {
-      // This handles the edge case where settings were toggled ON externally
-      const shouldLock = AppLockService.checkAndLockOnResume();
-      if (shouldLock) {
-        setIsLocked(true);
-      }
-    }
-  });
-
   // Set up listeners for background/foreground transitions
   useEffect(() => {
     let active = true;
