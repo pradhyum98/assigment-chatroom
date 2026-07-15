@@ -113,13 +113,11 @@ export class AppLockService {
         alias: 'com.securechat.applock.verifier',
         secret: hash
       });
-      // Do not store the hash in localStorage on Android
-      localStorage.removeItem(this.STORAGE_PREFIX + 'hash');
     } catch (e) {
-      // Web fallback
-      console.log('[AppLockService] Native secure secret storage unavailable. Storing locally.');
-      localStorage.setItem(this.STORAGE_PREFIX + 'hash', hash);
+      console.log('[AppLockService] Native secure secret storage unavailable.');
     }
+    // Always persist the slow-KDF hash in localStorage as a secure fallback to prevent lockout if KeyStore fails
+    localStorage.setItem(this.STORAGE_PREFIX + 'hash', hash);
   }
 
   public static async disableLock(): Promise<void> {

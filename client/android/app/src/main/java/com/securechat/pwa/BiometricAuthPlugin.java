@@ -32,7 +32,7 @@ public class BiometricAuthPlugin extends Plugin {
     public void isBiometricAvailable(PluginCall call) {
         try {
             BiometricManager biometricManager = BiometricManager.from(getContext());
-            int authenticators = BiometricManager.Authenticators.BIOMETRIC_STRONG | BiometricManager.Authenticators.DEVICE_CREDENTIAL;
+            int authenticators = BiometricManager.Authenticators.BIOMETRIC_STRONG;
             int result = biometricManager.canAuthenticate(authenticators);
 
             JSObject ret = new JSObject();
@@ -77,7 +77,8 @@ public class BiometricAuthPlugin extends Plugin {
                     BiometricPrompt.PromptInfo promptInfo = new BiometricPrompt.PromptInfo.Builder()
                         .setTitle(title)
                         .setSubtitle(subtitle)
-                        .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG | BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+                        .setNegativeButtonText("Use PIN/Pattern")
+                        .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
                         .build();
 
                     BiometricPrompt biometricPrompt = new BiometricPrompt((FragmentActivity) getActivity(), executor, new BiometricPrompt.AuthenticationCallback() {

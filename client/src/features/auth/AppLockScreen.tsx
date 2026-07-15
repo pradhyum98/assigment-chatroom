@@ -73,17 +73,23 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({ onUnlock }) => {
   };
 
   const verifyPin = async (inputPin: string) => {
-    const success = await AppLockService.verifyCredential(inputPin);
-    if (success) {
-      AppLockService.setSessionLocked(false);
-      onUnlock();
-    } else {
-      setPin('');
-      setErrorMsg('Incorrect PIN. Try again.');
-      // Subtle device vibration if supported
-      if (navigator.vibrate) {
-        navigator.vibrate(100);
+    try {
+      const success = await AppLockService.verifyCredential(inputPin);
+      if (success) {
+        AppLockService.setSessionLocked(false);
+        onUnlock();
+      } else {
+        setPin('');
+        setErrorMsg('Incorrect PIN. Try again.');
+        // Subtle device vibration if supported
+        if (navigator.vibrate) {
+          navigator.vibrate(100);
+        }
       }
+    } catch (err: any) {
+      console.error('[AppLockScreen] verifyPin failed:', err);
+      setErrorMsg(`Verification error: ${err?.message || err || 'Unknown error'}`);
+      setPin('');
     }
   };
 
@@ -228,19 +234,28 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({ onUnlock }) => {
 
     if (patternPath.length >= 4) {
       const patternString = patternPath.join('');
-      const success = await AppLockService.verifyCredential(patternString);
-      if (success) {
-        AppLockService.setSessionLocked(false);
-        onUnlock();
-      } else {
-        setErrorMsg('Incorrect pattern. Try again.');
-        if (navigator.vibrate) {
-          navigator.vibrate(100);
+      try {
+        const success = await AppLockService.verifyCredential(patternString);
+        if (success) {
+          AppLockService.setSessionLocked(false);
+          onUnlock();
+        } else {
+          setErrorMsg('Incorrect pattern. Try again.');
+          if (navigator.vibrate) {
+            navigator.vibrate(100);
+          }
+          setTimeout(() => {
+            setPatternPath([]);
+            setErrorMsg('');
+          }, 1000);
         }
+      } catch (err: any) {
+        console.error('[AppLockScreen] Pattern verification failed:', err);
+        setErrorMsg(`Verification error: ${err?.message || err || 'Unknown error'}`);
         setTimeout(() => {
           setPatternPath([]);
           setErrorMsg('');
-        }, 1000);
+        }, 1200);
       }
     } else if (patternPath.length > 0) {
       setErrorMsg('Connect at least 4 dots.');
