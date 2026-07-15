@@ -447,6 +447,50 @@ export const AppLockSettings: React.FC<AppLockSettingsProps> = ({ onBack }) => {
                 Set Pattern Lock
               </button>
             </div>
+
+            {/* Biometric Option */}
+            {isBiometricAvailable ? (
+              <div className="settings-section-card" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <Fingerprint size={22} color="var(--primary)" />
+                  <h3 style={{ margin: 0 }}>Biometric / Fingerprint</h3>
+                </div>
+                <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>
+                  Use your fingerprint or face ID to unlock the app.
+                </p>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 }}>
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>Enable Biometric Unlock</span>
+                  <label className="switch-toggle">
+                    <input
+                      type="checkbox"
+                      checked={biometricsEnabled}
+                      onChange={handleBiometricsToggle}
+                    />
+                    <span className="slider-round"></span>
+                  </label>
+                </div>
+              </div>
+            ) : biometricCode === 'NONE_ENROLLED' ? (
+              <div className="settings-section-card" style={{ display: 'flex', flexDirection: 'column', gap: 12, borderColor: '#eab308' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <Fingerprint size={22} color="#eab308" />
+                  <h3 style={{ margin: 0, color: '#eab308' }}>Biometric / Fingerprint</h3>
+                </div>
+                <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>
+                  No fingerprints enrolled. Go to <strong>Android Settings → Security → Fingerprint</strong> to set one up, then return here to enable biometric unlock.
+                </p>
+              </div>
+            ) : (
+              <div className="settings-section-card" style={{ display: 'flex', flexDirection: 'column', gap: 12, opacity: 0.6 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <Fingerprint size={22} color="var(--text-muted)" />
+                  <h3 style={{ margin: 0, color: 'var(--text-muted)' }}>Biometric Unavailable</h3>
+                </div>
+                <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: 0 }}>
+                  This device does not support biometric authentication.
+                </p>
+              </div>
+            )}
           </div>
         </>
       )}
