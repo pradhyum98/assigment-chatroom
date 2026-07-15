@@ -26,7 +26,11 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({ onUnlock }) => {
   // Trigger biometric unlock automatically if enabled
   useEffect(() => {
     if (biometricsEnabled) {
-      handleBiometricUnlock();
+      // Small delay to ensure Capacitor native plugin is fully registered on cold start
+      const timer = setTimeout(() => {
+        handleBiometricUnlock();
+      }, 500);
+      return () => clearTimeout(timer);
     }
   }, [biometricsEnabled]);
 

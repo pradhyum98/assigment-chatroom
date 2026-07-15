@@ -1,32 +1,49 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { AppLockService } from '../../services/AppLockService';
 import { AppLockScreen } from './AppLockScreen';
 
 export const AppLockOverlay: React.FC = () => {
-  const [isLocked, setIsLocked] = useState<boolean>(() => AppLockService.isAppCurrentlyLocked());
-
-  // Sync state with AppLockService on mount and change
-  useEffect(() => {
+  // On cold start, isSessionLocked (static) resets to false.
+  // We must check localStorage directly for the initial value.
+  const [isLocked, setIsLocked] = useState<boolean>(() => {
     if (AppLockService.isEnabled()) {
+      // On mount (cold start), ALWAYS lock if App Lock is enabled.
+      // The user must authenticate to unlock.
       AppLockService.setSessionLocked(true);
-      setIsLocked(true);
+      return true;
     }
-  }, []);
+    return false;
+  });
+
+  // Re-check on every render cycle in case isEnabled changed externally
+  useEffect(() => {
+    if (AppLockService.isEnabled() && !isLocked) {
+      // This handles the edge case where settings were toggled ON externally
+      const shouldLock = AppLockService.checkAndLockOnResume();
+      if (shouldLock) {
+        setIsLocked(true);
+      }
+    }
+  });
 
   // Set up listeners for background/foreground transitions
   useEffect(() => {
     let active = true;
     let capListener: any = null;
 
-    // 1. Native Capacitor listener
+    // 1. Native Capacitor listener for app backgrounding/foregrounding
     import('@capacitor/app').then(({ App: CapApp }) => {
       if (!active) return;
       CapApp.addListener('appStateChange', (state) => {
-        console.log('[AppLockOverlay] App state changed:', state.isActive ? 'active' : 'inactive');
+        console.log('[AppLockOverlay] App state changed:', state.isActive ? 'FOREGROUND' : 'BACKGROUND');
         if (state.isActive) {
-          const locked = AppLockService.checkAndLockOnResume();
-          setIsLocked(locked);
+          // App came to foreground — check if lock should engage
+          if (AppLockService.isEnabled()) {
+            const shouldLock = AppLockService.checkAndLockOnResume();
+            setIsLocked(shouldLock);
+          }
         } else {
+          // App went to background — record the timestamp
           AppLockService.updateActivity();
         }
       }).then((l) => {
@@ -34,19 +51,23 @@ export const AppLockOverlay: React.FC = () => {
       });
     });
 
-    // 2. Web visibility listener (as fallback and for browser testing)
+    // 2. Web visibility listener (fallback for browser testing)
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        const locked = AppLockService.checkAndLockOnResume();
-        setIsLocked(locked);
+        if (AppLockService.isEnabled()) {
+          const shouldLock = AppLockService.checkAndLockOnResume();
+          setIsLocked(shouldLock);
+        }
       } else {
         AppLockService.updateActivity();
       }
     };
 
     const handleFocus = () => {
-      const locked = AppLockService.checkAndLockOnResume();
-      setIsLocked(locked);
+      if (AppLockService.isEnabled()) {
+        const shouldLock = AppLockService.checkAndLockOnResume();
+        setIsLocked(shouldLock);
+      }
     };
 
     const handleBlur = () => {
@@ -68,11 +89,13 @@ export const AppLockOverlay: React.FC = () => {
     };
   }, []);
 
-  const handleUnlock = () => {
+  const handleUnlock = useCallback(() => {
+    AppLockService.setSessionLocked(false);
+    AppLockService.updateActivity();
     setIsLocked(false);
-  };
+  }, []);
 
-  // If locked, render the lock screen over the rest of the application
+  // Render the lock screen overlay if locked AND enabled
   if (isLocked && AppLockService.isEnabled()) {
     return <AppLockScreen onUnlock={handleUnlock} />;
   }
