@@ -33,7 +33,7 @@ export class ProjectionSubscriptionService {
         case 'MESSAGE_UPDATED':
           store.dispatch(updateMessage({
             messageId: change.payload.messageId || change.payload._id,
-            content: change.payload.content,
+            content: change.payload.editedAt ? change.payload.content : undefined,
             editedAt: change.payload.editedAt,
             readBy: change.payload.readBy,
             deliveredTo: change.payload.deliveredTo,

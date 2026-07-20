@@ -88,7 +88,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
   const scrollStateRef = useRef({ prevScrollHeight: 0, prevScrollTop: 0, adjustScroll: false });
   const lastRoomIdRef = useRef<string | null>(null);
   const createdObjectUrlsRef = useRef<string[]>([]);
-  const decryptedTextIdsRef = useRef<Set<string>>(new Set());
+  const decryptedTextIdsRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     const handleOnline = () => setIsNetworkOnline(true);
@@ -190,10 +190,10 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
         if (!msgId) continue;
 
         const isEncryptedText = msg.iv && msg.content && (!msg.type || msg.type === 'text');
-        const needsDecryption = isEncryptedText && !decryptedTextIdsRef.current.has(msgId);
+        const needsDecryption = isEncryptedText && decryptedTextIdsRef.current.get(msgId) !== (msg.editedAt?.toString() || 'original');
 
         if (needsDecryption) {
-          decryptedTextIdsRef.current.add(msgId);
+          decryptedTextIdsRef.current.set(msgId, msg.editedAt?.toString() || 'original');
           try {
             const decryptedContent = await decryptPayload(msg.content, msg.iv, roomKey);
             dispatch(setDecryptedMessageContent({ messageId: msgId, content: decryptedContent }));
@@ -470,7 +470,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
         // on plaintext and return '[Encrypted Message]').
         fetchedMessages.forEach((m: any) => {
           const id = m.messageId || m._id;
-          if (id) decryptedTextIdsRef.current.add(id);
+          if (id) decryptedTextIdsRef.current.set(id, m.editedAt?.toString() || 'original');
         });
 
         dispatch(setMessages(fetchedMessages));
@@ -524,7 +524,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
             // Mark local fallback messages as already-decrypted too
             localRoomMsgs.forEach((m: any) => {
               const id = m.messageId || m._id;
-              if (id) decryptedTextIdsRef.current.add(id);
+              if (id) decryptedTextIdsRef.current.set(id, m.editedAt?.toString() || 'original');
             });
 
             dispatch(setMessages(localRoomMsgs));
