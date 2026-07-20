@@ -1842,6 +1842,24 @@
   margin-bottom: 12px;
 }
 
+@keyframes pulse-animation {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .4; }
+}
+
+.animate-pulse {
+  animation: pulse-animation 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes spin-animation {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin {
+  animation: spin-animation 1s linear infinite;
+}
+
 
 
 

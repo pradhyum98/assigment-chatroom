@@ -46,12 +46,42 @@ export const EventProjectionHandlers = {
     }
   },
 
-  async handleReadUpdated(_reconciler: CanonicalReconciler, _tx: IDBTransaction, _event: RoomEventEnvelope, _payload: any, _changes: ProjectionChangeSet) {
-    // Update read receipts
+  async handleReadUpdated(reconciler: CanonicalReconciler, tx: IDBTransaction, _event: RoomEventEnvelope, payload: any, changes: ProjectionChangeSet) {
+    const accountId = (reconciler as any).db.getAccountId();
+    const { messageIds, userId, readAt } = payload;
+    if (!messageIds || !Array.isArray(messageIds) || !userId) return;
+
+    for (const msgId of messageIds) {
+      const existing = await reconciler.getProjection(tx, 'message_projections', [accountId, msgId]);
+      if (existing) {
+        if (!existing.readBy) existing.readBy = [];
+        const alreadyExists = existing.readBy.some((r: any) => (r.userId?._id || r.userId || '').toString() === userId.toString());
+        if (!alreadyExists) {
+          existing.readBy.push({ userId, readAt: readAt || new Date().toISOString() });
+          reconciler.putProjection(tx, 'message_projections', existing);
+          changes.push({ type: 'MESSAGE_UPDATED', payload: existing });
+        }
+      }
+    }
   },
 
-  async handleDeliveryUpdated(_reconciler: CanonicalReconciler, _tx: IDBTransaction, _event: RoomEventEnvelope, _payload: any, _changes: ProjectionChangeSet) {
-    // Update delivery receipts
+  async handleDeliveryUpdated(reconciler: CanonicalReconciler, tx: IDBTransaction, _event: RoomEventEnvelope, payload: any, changes: ProjectionChangeSet) {
+    const accountId = (reconciler as any).db.getAccountId();
+    const { messageIds, userId, deliveredAt } = payload;
+    if (!messageIds || !Array.isArray(messageIds) || !userId) return;
+
+    for (const msgId of messageIds) {
+      const existing = await reconciler.getProjection(tx, 'message_projections', [accountId, msgId]);
+      if (existing) {
+        if (!existing.deliveredTo) existing.deliveredTo = [];
+        const alreadyExists = existing.deliveredTo.some((d: any) => (d.userId?._id || d.userId || '').toString() === userId.toString());
+        if (!alreadyExists) {
+          existing.deliveredTo.push({ userId, deliveredAt: deliveredAt || new Date().toISOString() });
+          reconciler.putProjection(tx, 'message_projections', existing);
+          changes.push({ type: 'MESSAGE_UPDATED', payload: existing });
+        }
+      }
+    }
   },
 
   async handleRoomMetadataChanged(reconciler: CanonicalReconciler, tx: IDBTransaction, event: RoomEventEnvelope, payload: any) {

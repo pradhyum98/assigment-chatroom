@@ -10,8 +10,8 @@ import { getLocalAccountCleanupService } from '../../services/LocalAccountCleanu
 import './Auth.css';
 
 const LoginPage: React.FC = () => {
-  const [email, setEmail] = useState('test_user_a_17839630@example.com');
-  const [password, setPassword] = useState('Password123!');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showIdentityReset, setShowIdentityReset] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
   const dispatch = useAppDispatch();

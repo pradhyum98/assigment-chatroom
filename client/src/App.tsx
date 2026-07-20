@@ -148,17 +148,28 @@ const App: React.FC = () => {
               dispatch(setStartupState('HYDRATING_LOCAL_STATE'));
             } else if (result === 'NO_KEY') {
               if (secretStore.getPrivateKey()) {
+                // Key already in memory (e.g. just logged in), continue normally
                 dispatch(setStartupState('HYDRATING_LOCAL_STATE'));
               } else {
-                console.log('[App] Private key is missing from memory and device keystore. E2EE Unlock required.');
-                dispatch(setStartupState('E2EE_UNLOCK_REQUIRED'));
+                // Key not found on this device (fresh install / reinstall).
+                // Log out and send to login screen — login will re-wrap the key automatically.
+                console.log('[App] Device keystore key missing (fresh install). Logging out for clean login.');
+                dispatch(logoutUser());
+                dispatch(setStartupState('UNAUTHENTICATED'));
               }
-            } else if (result === 'KEY_INVALIDATED' || result === 'ERROR') {
+            } else if (result === 'KEY_INVALIDATED') {
+              // Biometrics changed on the same device — must re-derive key from password
               dispatch(setStartupState('E2EE_UNLOCK_REQUIRED'));
+            } else if (result === 'ERROR') {
+              // Unknown error — treat as missing key, log out cleanly
+              console.log('[App] E2EE key unwrap error. Logging out for clean login.');
+              dispatch(logoutUser());
+              dispatch(setStartupState('UNAUTHENTICATED'));
             }
           } catch (e) {
             console.error('[App] E2EE key restoration crashed:', e);
-            dispatch(setStartupState('E2EE_UNLOCK_REQUIRED'));
+            dispatch(logoutUser());
+            dispatch(setStartupState('UNAUTHENTICATED'));
           }
         } else {
           dispatch(setStartupState('UNAUTHENTICATED'));

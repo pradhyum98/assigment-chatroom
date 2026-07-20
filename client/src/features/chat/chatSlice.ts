@@ -56,6 +56,7 @@ export interface Message {
   wrappedMediaKey?: string;
   mediaKeyIv?: string;
   isOptimistic?: boolean;
+  status?: string;
   isEdited?: boolean;
   isDeleted?: boolean;
 }
@@ -105,12 +106,25 @@ const chatSlice = createSlice({
         msg.content = action.payload.content;
       }
     },
-    updateMessage: (state, action: PayloadAction<{ messageId: string; _id?: string; content: string; editedAt: string }>) => {
-      const msg = state.messages.find(m => m.messageId === action.payload.messageId);
+    updateMessage: (state, action: PayloadAction<{
+      messageId: string;
+      _id?: string;
+      content?: string;
+      editedAt?: string;
+      readBy?: ReadReceipt[];
+      deliveredTo?: DeliveryReceipt[];
+      reactions?: Reaction[];
+    }>) => {
+      const msg = state.messages.find(m => m.messageId === action.payload.messageId || (action.payload._id && m._id === action.payload._id));
       if (msg) {
-        msg.content = action.payload.content;
-        msg.editedAt = action.payload.editedAt;
-        msg.isEdited = true;
+        if (action.payload.content !== undefined) msg.content = action.payload.content;
+        if (action.payload.editedAt !== undefined) {
+          msg.editedAt = action.payload.editedAt;
+          msg.isEdited = true;
+        }
+        if (action.payload.readBy !== undefined) msg.readBy = action.payload.readBy;
+        if (action.payload.deliveredTo !== undefined) msg.deliveredTo = action.payload.deliveredTo;
+        if (action.payload.reactions !== undefined) msg.reactions = action.payload.reactions;
       }
     },
     deleteMessage: (state, action: PayloadAction<{ messageId: string; _id?: string; deletedForEveryone: boolean }>) => {
@@ -275,6 +289,7 @@ export const selectVisibleMessages = (state: RootChatState, roomId: string, acco
           wrappedMediaKey: (mut.payload as any).wrappedMediaKey,
           mediaKeyIv: (mut.payload as any).mediaKeyIv,
           isOptimistic: true,
+          status: mut.status,
         });
       }
     } else if (isEditMutation(mut)) {

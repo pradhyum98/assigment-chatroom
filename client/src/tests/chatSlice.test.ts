@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import chatReducer, {
   addMessage,
+  updateMessage,
   addOptimisticMutation,
   removeOptimisticMutation,
   updateOptimisticMutationStatus,
@@ -111,5 +112,28 @@ describe('chatSlice — selectors', () => {
     expect(selectMessageExists(messages, 'msg-1')).toBe(true);
     expect(selectMessageExists(messages, 'cid-1')).toBe(true);
     expect(selectMessageExists(messages, 'nonexistent')).toBe(false);
+  });
+});
+
+describe('chatSlice — receipt updates', () => {
+  it('updateMessage updates receipts and reactions successfully', () => {
+    let state = getInitialState();
+    state = chatReducer(state, addMessage(mockMessage));
+    
+    const readReceipt = { userId: 'user-2', readAt: '2026-07-20T10:00:00Z' };
+    const deliveryReceipt = { userId: 'user-2', deliveredAt: '2026-07-20T09:00:00Z' };
+    const reaction = { emoji: '👍', userId: 'user-2' };
+
+    const next = chatReducer(state, updateMessage({
+      messageId: 'msg-1',
+      readBy: [readReceipt],
+      deliveredTo: [deliveryReceipt],
+      reactions: [reaction],
+    }));
+
+    const updated = next.messages[0];
+    expect(updated.readBy).toEqual([readReceipt]);
+    expect(updated.deliveredTo).toEqual([deliveryReceipt]);
+    expect(updated.reactions).toEqual([reaction]);
   });
 });

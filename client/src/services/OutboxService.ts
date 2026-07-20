@@ -253,4 +253,31 @@ export class OutboxService {
       req.onerror = () => reject(req.error);
     });
   }
+
+  async retryMutation(mutationId: string): Promise<void> {
+    const accountId = this.db.getAccountId();
+    const tx = await this.db.transaction('offline_queue_v3', 'readwrite');
+    const storeObj = tx.objectStore('offline_queue_v3');
+    
+    await new Promise<void>((resolve, reject) => {
+      const req = storeObj.get([accountId, mutationId]);
+      req.onsuccess = () => {
+        const item = req.result;
+        if (item) {
+          item.status = 'PENDING';
+          item.attemptCount = 0;
+          item.nextAttemptAt = Date.now();
+          storeObj.put(item);
+          
+          const key = item.clientMsgId || item.mutationId;
+          store.dispatch(updateOptimisticMutationStatus({ key, status: 'PENDING' }));
+        }
+        resolve();
+      };
+      req.onerror = () => reject(req.error);
+    });
+
+    // Trigger queue flush to try sending again immediately
+    this.flush();
+  }
 }

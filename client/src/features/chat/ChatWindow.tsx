@@ -6,7 +6,7 @@ import api, { getAccessToken } from '../../services/api';
 import { TransportConfig } from '../../config/TransportConfig';
 import { UploadService } from '../../services/uploadService';
 import { socketService } from '../../services/socket';
-import { Send, Mic, Plus, CheckCheck, Check, Loader2, Edit2, Trash2, Smile, FileText, Download, Phone, Video, MessageSquare, X, Pin, ArrowLeft, Copy, Forward, Star, Image, File, VolumeX, Ban, Search, Users, User, AlertTriangle } from 'lucide-react';
+import { Send, Mic, Plus, CheckCheck, Check, Loader2, Edit2, Trash2, Smile, FileText, Download, Phone, Video, MessageSquare, X, Pin, ArrowLeft, Copy, Forward, Star, Image, File, VolumeX, Ban, Search, Users, User, AlertTriangle, Clock, RefreshCw } from 'lucide-react';
 import { useCall } from '../calls/CallContext';
 import VoiceRecorder from '../media/VoiceRecorder';
 import ReactMarkdown from 'react-markdown';
@@ -544,6 +544,20 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
     setReplyingTo(null);
   }, [currentRoom?.roomId, dispatch, user]);
 
+  // Automatically mark incoming messages as read when they appear in the chat list and the room is active
+  useEffect(() => {
+    if (!currentRoom || !user || visibleMessages.length === 0) return;
+    
+    const unreadMessageIds = visibleMessages
+      .filter((m: any) => m.senderId !== user._id && !m.isOptimistic && !m.readBy?.some((r: any) => (r.userId?._id || r.userId || '').toString() === user._id))
+      .map((m: any) => m.messageId || m._id);
+      
+    if (unreadMessageIds.length > 0) {
+      socketService.markAsRead({ roomId: currentRoom.roomId, messageIds: unreadMessageIds });
+      dispatch(clearUnreadCount({ roomId: currentRoom.roomId, userId: user._id }));
+    }
+  }, [visibleMessages, currentRoom?.roomId, user?._id, dispatch]);
+
   useEffect(() => {
     if (isLoading || isLoadingMore || !hasMore || !messages.length) return;
 
@@ -792,6 +806,14 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
       typingTimeoutRef.current = setTimeout(() => {
         socketService.setTyping({ roomId: currentRoom.roomId, isTyping: false });
       }, 2000);
+    }
+  };
+
+  const handleRetryMessage = async (messageId: string) => {
+    try {
+      await syncEngine.retryMutation(messageId);
+    } catch (err) {
+      console.error('Failed to retry sending message:', err);
     }
   };
 
@@ -1311,8 +1333,25 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
           
           if (!isSentByMe && msg.deletedAt && !msg.deletedForEveryone) return null; // Soft deleted for other, ignore here since we only soft delete for self in UI usually
 
-          const isRead = msg.readBy && msg.readBy.length > 0;
-          const isDelivered = msg.deliveredTo && msg.deliveredTo.length > 0;
+          const isRead = (() => {
+            if (!currentRoom || !user) return false;
+            const otherParticipantIds = currentRoom.participants
+              .map((p: any) => (typeof p === 'string' ? p : p._id || p.toString()))
+              .filter((pId: string) => pId !== user._id);
+            if (otherParticipantIds.length === 0) return false;
+            const readUserIds = new Set((msg.readBy || []).map((r: any) => (r.userId?._id || r.userId || '').toString()));
+            return otherParticipantIds.every((pId: string) => readUserIds.has(pId));
+          })();
+
+          const isDelivered = (() => {
+            if (!currentRoom || !user) return false;
+            const otherParticipantIds = currentRoom.participants
+              .map((p: any) => (typeof p === 'string' ? p : p._id || p.toString()))
+              .filter((pId: string) => pId !== user._id);
+            if (otherParticipantIds.length === 0) return false;
+            const deliveredUserIds = new Set((msg.deliveredTo || []).map((d: any) => (d.userId?._id || d.userId || '').toString()));
+            return otherParticipantIds.every((pId: string) => deliveredUserIds.has(pId));
+          })();
 
           const isSystem = msg.senderName === 'System';
 
@@ -1484,7 +1523,26 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
                 )}
                 <span>{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                 {isSentByMe && (
-                  isRead ? <CheckCheck size={14} color="#3b82f6" /> : (isDelivered ? <CheckCheck size={14} /> : <Check size={14} />)
+                  msg.isOptimistic ? (
+                    msg.status === 'RETRYABLE_FAILURE' ? (
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', marginLeft: '4px' }}>
+                        <span className="failed-to-send-text" style={{ color: '#ef4444', fontSize: '11px' }}>
+                          Failed to send
+                        </span>
+                        <button 
+                          onClick={() => handleRetryMessage(msg.messageId)}
+                          title="Retry"
+                          style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: '#ef4444', display: 'inline-flex', alignItems: 'center' }}
+                        >
+                          <RefreshCw size={12} className="animate-spin" />
+                        </button>
+                      </div>
+                    ) : (
+                      <Clock size={12} className="text-slate-400 animate-pulse" style={{ marginLeft: '4px' }} />
+                    )
+                  ) : (
+                    isRead ? <CheckCheck size={14} color="#3b82f6" style={{ marginLeft: '4px' }} /> : (isDelivered ? <CheckCheck size={14} className="text-slate-400" style={{ marginLeft: '4px' }} /> : <Check size={14} className="text-slate-400" style={{ marginLeft: '4px' }} />)
+                  )
                 )}
               </div>
             </div>
