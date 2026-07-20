@@ -113,6 +113,8 @@ class SyncEngine {
         this.recoveryCoordinator.triggerRecovery('socket_connect');
         // Flush outbox on every reconnect so queued messages go out immediately.
         this.outboxService.flush();
+        // Sync pending delivery receipts for offline caught up messages
+        projectionSubscriptionService.syncPendingDeliveryReceipts();
       });
     }
 
@@ -160,14 +162,16 @@ class SyncEngine {
     store.dispatch(addOptimisticMutation(mutation));
   }
 
-  /**
-   * Called by CanonicalReconciler when a canonical event is committed.
-   * Removes the matching optimistic overlay entry.
-   */
   finalizeOptimisticMutation(clientMsgId: string | undefined, mutationId: string | undefined) {
     const key = clientMsgId ?? mutationId;
     if (key) {
       store.dispatch(removeOptimisticMutation(key));
+    }
+  }
+
+  async retryMutation(mutationId: string): Promise<void> {
+    if (this.outboxService) {
+      await this.outboxService.retryMutation(mutationId);
     }
   }
 

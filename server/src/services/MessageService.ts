@@ -433,6 +433,7 @@ export class MessageService {
         actorId: payload.senderId,
         payload: {
           messageIds: readUuids,
+          userId: payload.senderId,
           readAt: now
         }
       });
@@ -480,6 +481,7 @@ export class MessageService {
         actorId: payload.senderId,
         payload: {
           messageIds: delUuids,
+          userId: payload.senderId,
           deliveredAt: now
         }
       });
