@@ -268,6 +268,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -322,6 +323,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
     }
     if (imageInputRef.current) {
       imageInputRef.current.value = '';
+    }
+    if (cameraInputRef.current) {
+      cameraInputRef.current.value = '';
     }
     if (videoInputRef.current) {
       videoInputRef.current.value = '';
@@ -1607,6 +1611,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
               {/* Hidden file inputs with type-specific accept */}
               <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={handleFileChange} />
               <input type="file" ref={imageInputRef} style={{ display: 'none' }} accept="image/*" onChange={handleFileChange} />
+              <input type="file" ref={cameraInputRef} style={{ display: 'none' }} accept="image/*" capture="environment" onChange={handleFileChange} />
               <input type="file" ref={videoInputRef} style={{ display: 'none' }} accept="video/*" onChange={handleFileChange} />
 
               {/* Attachment bottom-sheet */}
@@ -1624,13 +1629,13 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ onBack }) => {
                 {showAttachmentPopover && (
                   <div className="attachment-bottom-sheet" onClick={(e) => e.stopPropagation()}>
                     <div className="attachment-sheet-row">
-                      <button type="button" className="attachment-option" onClick={() => { imageInputRef.current?.setAttribute('capture', 'environment'); imageInputRef.current?.click(); setShowAttachmentPopover(false); }}>
+                      <button type="button" className="attachment-option" onClick={() => { cameraInputRef.current?.click(); setShowAttachmentPopover(false); }}>
                         <div className="attachment-icon-wrapper" style={{ background: 'linear-gradient(135deg,#f59e0b,#ef4444)' }}>
                           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
                         </div>
                         <span>Camera</span>
                       </button>
-                      <button type="button" className="attachment-option" onClick={() => { imageInputRef.current?.removeAttribute('capture'); imageInputRef.current?.click(); setShowAttachmentPopover(false); }}>
+                      <button type="button" className="attachment-option" onClick={() => { imageInputRef.current?.click(); setShowAttachmentPopover(false); }}>
                         <div className="attachment-icon-wrapper" style={{ background: 'linear-gradient(135deg,#10b981,#059669)' }}>
                           <Image size={20} color="white" />
                         </div>
